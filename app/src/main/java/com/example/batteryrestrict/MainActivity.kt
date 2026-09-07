@@ -105,7 +105,7 @@ private fun FeatureCardItem(card: FeatureCard) {
             .clickable(
                 enabled = card.enabled,
                 interactionSource = interactionSource,
-                indication = ripple()
+                indication = LocalIndication.current
             ) { card.onClick() },
         colors = CardDefaults.elevatedCardColors(
             containerColor = if (card.enabled)
