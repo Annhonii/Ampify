@@ -1,5 +1,10 @@
 package com.example.batteryrestrict
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -18,18 +23,18 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -112,90 +117,202 @@ fun AppRoot() {
     }
 }
 
-private data class FeatureCard(
-    val title: String,
-    val subtitle: String,
-    val emoji: String,
-    val enabled: Boolean,
-    val onClick: () -> Unit
-)
+// ---------- Live battery state ----------
+
+private data class BatteryState(val percent: Int, val isCharging: Boolean)
+
+@Composable
+private fun rememberBatteryState(): BatteryState {
+    val context = LocalContext.current
+    var state by remember { mutableStateOf(BatteryState(0, false)) }
+
+    DisposableEffect(Unit) {
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+
+        fun update(intent: Intent?) {
+            if (intent == null) return
+            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+            val pct = if (level >= 0 && scale > 0) (level * 100 / scale) else 0
+            val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+            val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == BatteryManager.BATTERY_STATUS_FULL
+            state = BatteryState(pct, charging)
+        }
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context?, intent: Intent?) = update(intent)
+        }
+
+        val sticky = context.registerReceiver(receiver, filter)
+        update(sticky)
+
+        onDispose { context.unregisterReceiver(receiver) }
+    }
+
+    return state
+}
+
+// ---------- Home screen (Settings-style) ----------
 
 @Composable
 fun HomeScreen(onOpenChargeSpeed: () -> Unit) {
-    val cards = listOf(
-        FeatureCard("Change charge speed", "Limit charge current", "⚡", true, onOpenChargeSpeed),
-        FeatureCard("Battery health", "Coming soon", "🔋", false, {}),
-        FeatureCard("More tools", "Coming soon", "🛠️", false, {})
-    )
+    val battery = rememberBatteryState()
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.systemBars)
-            .padding(20.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp)
     ) {
-        Text("Battery Tools", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(12.dp))
+
+        Text(
+            "Battery",
+            style = MaterialTheme.typography.displaySmall,
+            fontWeight = FontWeight.Bold
+        )
+
         Spacer(Modifier.height(20.dp))
 
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(2),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            items(cards) { card -> FeatureCardItem(card) }
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                "${battery.percent}",
+                style = MaterialTheme.typography.displayLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                "%",
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(bottom = 8.dp, start = 2.dp)
+            )
         }
+
+        Spacer(Modifier.height(16.dp))
+
+        BatteryLevelBar(percent = battery.percent)
+
+        Spacer(Modifier.height(10.dp))
+
+        Text(
+            if (battery.isCharging) "Charging" else "Not charging",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Spacer(Modifier.height(28.dp))
+
+        SettingsCard(
+            title = "Charge Control",
+            subtitle = "Limit charging current to reduce heat and battery wear",
+            enabled = true,
+            onClick = onOpenChargeSpeed
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        SettingsCard(
+            title = "Thermal Profiles",
+            subtitle = "Coming soon",
+            enabled = false,
+            onClick = {}
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        SettingsCard(
+            title = "Power Profile",
+            subtitle = "Coming soon",
+            enabled = false,
+            onClick = {}
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        SettingsCard(
+            title = "Battery usage",
+            subtitle = "Coming soon",
+            enabled = false,
+            onClick = {}
+        )
+
+        Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
-private fun FeatureCardItem(card: FeatureCard) {
+private fun BatteryLevelBar(percent: Int) {
+    val fraction = (percent.coerceIn(0, 100)) / 100f
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(28.dp)
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(fraction)
+                .clip(RoundedCornerShape(50))
+                .background(MaterialTheme.colorScheme.primary)
+        )
+    }
+}
+
+@Composable
+private fun SettingsCard(
+    title: String,
+    subtitle: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.93f else 1f,
+        targetValue = if (isPressed) 0.97f else 1f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
-        label = "cardScale"
+        label = "settingsCardScale"
     )
 
-    ElevatedCard(
+    Card(
         modifier = Modifier
-            .aspectRatio(1f)
+            .fillMaxWidth()
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clickable(
-                enabled = card.enabled,
+                enabled = enabled,
                 interactionSource = interactionSource,
                 indication = LocalIndication.current
-            ) { card.onClick() },
-        colors = CardDefaults.elevatedCardColors(
-            containerColor = if (card.enabled)
-                MaterialTheme.colorScheme.primaryContainer
-            else
+            ) { onClick() },
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (enabled)
                 MaterialTheme.colorScheme.surfaceVariant
+            else
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         )
     ) {
-        Column(
-            modifier = Modifier.fillMaxSize().padding(16.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(card.emoji, style = MaterialTheme.typography.headlineLarge)
-            Column {
-                Text(
-                    card.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (card.enabled) MaterialTheme.colorScheme.onPrimaryContainer
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    card.subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (card.enabled) MaterialTheme.colorScheme.onPrimaryContainer
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            )
         }
     }
 }
+
+// ---------- Charge Control detail screen ----------
 
 @Composable
 fun ChargeSpeedScreen(onBack: () -> Unit) {
@@ -229,7 +346,6 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Small circular back button, standalone, settings-style
         FilledTonalIconButton(
             onClick = onBack,
             modifier = Modifier.size(40.dp)
@@ -238,7 +354,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
         }
 
         Text(
-            "Change speed",
+            "Charge Control",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold
         )
@@ -298,7 +414,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                         OutlinedTextField(
                             value = currentInputMa,
                             onValueChange = { input -> currentInputMa = input.filter { it.isDigit() } },
-                            label = { Text("In milliamps") },
+                            label = { Text("mA (e.g. 1200, 1500)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
