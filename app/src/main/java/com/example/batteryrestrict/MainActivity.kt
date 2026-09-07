@@ -2,10 +2,18 @@ package com.example.batteryrestrict
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -13,7 +21,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.LocalIndication
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -52,9 +61,31 @@ private enum class Screen { Home, ChargeSpeed }
 fun AppRoot() {
     var screen by remember { mutableStateOf(Screen.Home) }
 
-    when (screen) {
-        Screen.Home -> HomeScreen(onOpenChargeSpeed = { screen = Screen.ChargeSpeed })
-        Screen.ChargeSpeed -> ChargeSpeedScreen(onBack = { screen = Screen.Home })
+    // Hardware/gesture back button: if we're on a sub-screen, go back to
+    // the home screen with cards instead of exiting the app.
+    BackHandler(enabled = screen != Screen.Home) {
+        screen = Screen.Home
+    }
+
+    AnimatedContent(
+        targetState = screen,
+        transitionSpec = {
+            if (targetState == Screen.ChargeSpeed) {
+                // Opening a card: zoom out into it
+                (scaleIn(initialScale = 1.1f) + fadeIn()) togetherWith
+                    (scaleOut(targetScale = 0.9f) + fadeOut())
+            } else {
+                // Going back: zoom in back to the grid
+                (scaleIn(initialScale = 0.9f) + fadeIn()) togetherWith
+                    (scaleOut(targetScale = 1.1f) + fadeOut())
+            }
+        },
+        label = "screenTransition"
+    ) { targetScreen ->
+        when (targetScreen) {
+            Screen.Home -> HomeScreen(onOpenChargeSpeed = { screen = Screen.ChargeSpeed })
+            Screen.ChargeSpeed -> ChargeSpeedScreen(onBack = { screen = Screen.Home })
+        }
     }
 }
 
@@ -143,7 +174,8 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
     var rootGranted by remember { mutableStateOf<Boolean?>(null) }
     var nodesPresent by remember { mutableStateOf(true) }
     var restrictEnabled by remember { mutableStateOf(false) }
-    var currentInput by remember { mutableStateOf("2000") }
+    // Displayed and edited in mA; converted to/from the raw µA sysfs value.
+    var currentInputMa by remember { mutableStateOf("1000") }
     var status by remember { mutableStateOf<String?>(null) }
     var isError by remember { mutableStateOf(false) }
 
@@ -155,8 +187,8 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                 RootUtils.nodeExists("/sys/class/qcom-battery/restrict_cur")
             if (nodesPresent) {
                 restrictEnabled = RootUtils.readRestrictChg() == "1"
-                val cur = RootUtils.readRestrictCur()
-                if (cur.isNotBlank()) currentInput = cur
+                val curRaw = RootUtils.readRestrictCur().toIntOrNull()
+                if (curRaw != null) currentInputMa = (curRaw / 1000).toString()
             }
         }
     }
@@ -165,9 +197,17 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
         modifier = Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        TextButton(onClick = onBack) { Text("← Back") }
-
-        Text("Change Charge Speed", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(
+                "Change Charge Speed",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
 
         when {
             rootGranted == null -> {
@@ -201,24 +241,21 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Restrict charging", style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    "Writes 1 to restrict_chg",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                            Text(
+                                "Enable services",
+                                style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.weight(1f)
+                            )
                             Switch(
                                 checked = restrictEnabled,
                                 onCheckedChange = { checked ->
                                     val ok = RootUtils.setRestrictChg(checked)
                                     if (ok) {
                                         restrictEnabled = checked
-                                        status = "restrict_chg set to ${if (checked) 1 else 0}"
+                                        status = "Services ${if (checked) "enabled" else "disabled"}"
                                         isError = false
                                     } else {
-                                        status = "Failed to write restrict_chg"
+                                        status = "Failed to update services"
                                         isError = true
                                     }
                                 }
@@ -229,22 +266,25 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
 
                         Text("Charge current limit", style = MaterialTheme.typography.titleMedium)
                         OutlinedTextField(
-                            value = currentInput,
-                            onValueChange = { input -> currentInput = input.filter { it.isDigit() } },
+                            value = currentInputMa,
+                            onValueChange = { input -> currentInputMa = input.filter { it.isDigit() } },
                             label = { Text("Milliamps (mA)") },
+                            placeholder = { Text("e.g. 1200, 1500") },
+                            suffix = { Text("mA") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
 
                         Button(
                             onClick = {
-                                val ma = currentInput.toIntOrNull()
+                                val ma = currentInputMa.toIntOrNull()
                                 if (ma == null || ma <= 0) {
                                     status = "Enter a valid positive number"
                                     isError = true
                                 } else {
-                                    val ok = RootUtils.setRestrictCur(ma)
-                                    status = if (ok) "restrict_cur set to $ma mA" else "Failed to write restrict_cur"
+                                    val microAmps = ma * 1000
+                                    val ok = RootUtils.setRestrictCur(microAmps)
+                                    status = if (ok) "Charge speed set to ${ma}mA" else "Failed to set charge speed"
                                     isError = !ok
                                 }
                             },
