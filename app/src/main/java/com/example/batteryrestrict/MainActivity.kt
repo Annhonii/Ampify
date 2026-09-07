@@ -3,11 +3,22 @@ package com.example.batteryrestrict
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material.ripple.ripple
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.topjohnwu.superuser.Shell
@@ -28,15 +39,107 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    BatteryRestrictScreen()
+                    AppRoot()
                 }
             }
         }
     }
 }
 
+private enum class Screen { Home, ChargeSpeed }
+
 @Composable
-fun BatteryRestrictScreen() {
+fun AppRoot() {
+    var screen by remember { mutableStateOf(Screen.Home) }
+
+    when (screen) {
+        Screen.Home -> HomeScreen(onOpenChargeSpeed = { screen = Screen.ChargeSpeed })
+        Screen.ChargeSpeed -> ChargeSpeedScreen(onBack = { screen = Screen.Home })
+    }
+}
+
+private data class FeatureCard(
+    val title: String,
+    val subtitle: String,
+    val emoji: String,
+    val enabled: Boolean,
+    val onClick: () -> Unit
+)
+
+@Composable
+fun HomeScreen(onOpenChargeSpeed: () -> Unit) {
+    val cards = listOf(
+        FeatureCard("Change charge speed", "Limit charge current", "⚡", true, onOpenChargeSpeed),
+        FeatureCard("Battery health", "Coming soon", "🔋", false, {}),
+        FeatureCard("More tools", "Coming soon", "🛠️", false, {})
+    )
+
+    Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
+        Text("Battery Tools", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(20.dp))
+
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            items(cards) { card -> FeatureCardItem(card) }
+        }
+    }
+}
+
+@Composable
+private fun FeatureCardItem(card: FeatureCard) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed) 0.93f else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "cardScale"
+    )
+
+    ElevatedCard(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .graphicsLayer { scaleX = scale; scaleY = scale }
+            .clickable(
+                enabled = card.enabled,
+                interactionSource = interactionSource,
+                indication = ripple()
+            ) { card.onClick() },
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = if (card.enabled)
+                MaterialTheme.colorScheme.primaryContainer
+            else
+                MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(card.emoji, style = MaterialTheme.typography.headlineLarge)
+            Column {
+                Text(
+                    card.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (card.enabled) MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    card.subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (card.enabled) MaterialTheme.colorScheme.onPrimaryContainer
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ChargeSpeedScreen(onBack: () -> Unit) {
     var rootGranted by remember { mutableStateOf<Boolean?>(null) }
     var nodesPresent by remember { mutableStateOf(true) }
     var restrictEnabled by remember { mutableStateOf(false) }
@@ -59,16 +162,12 @@ fun BatteryRestrictScreen() {
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
+        modifier = Modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        Text(
-            "Battery Charge Restrictor",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
-        )
+        TextButton(onClick = onBack) { Text("← Back") }
+
+        Text("Change Charge Speed", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
 
         when {
             rootGranted == null -> {
@@ -89,7 +188,7 @@ fun BatteryRestrictScreen() {
             !nodesPresent -> {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                     Text(
-                        "This device's kernel doesn't expose /sys/class/qcom-battery/restrict_chg or restrict_cur. This feature is kernel-specific and may not exist on your device.",
+                        "This device's kernel doesn't expose /sys/class/qcom-battery/restrict_chg or restrict_cur.",
                         modifier = Modifier.padding(16.dp)
                     )
                 }
