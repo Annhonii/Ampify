@@ -8,11 +8,11 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.batteryrestrict"
+        applicationId = "com.android.ampify"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 69
+        versionName = "6.9"
     }
 
     buildFeatures {
