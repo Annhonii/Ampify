@@ -1,26 +1,27 @@
 package com.example.batteryrestrict
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
@@ -77,6 +78,9 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Sharp-cornered shape used everywhere a "card" used to have a rounded corner.
+private val SharpCardShape = RoundedCornerShape(0.dp)
+
 private enum class Screen { Home, ChargeSpeed }
 
 @Composable
@@ -87,27 +91,16 @@ fun AppRoot() {
         screen = Screen.Home
     }
 
+    // Plain, normal sliding transition instead of the previous scale+fade animation.
     AnimatedContent(
         targetState = screen,
         transitionSpec = {
             if (targetState == Screen.ChargeSpeed) {
-                (scaleIn(
-                    initialScale = 0.8f,
-                    animationSpec = tween(420, easing = FastOutSlowInEasing)
-                ) + fadeIn(animationSpec = tween(420))) togetherWith
-                    (scaleOut(
-                        targetScale = 1.15f,
-                        animationSpec = tween(420, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(300)))
+                slideInHorizontally(animationSpec = tween(300)) { fullWidth -> fullWidth } togetherWith
+                    slideOutHorizontally(animationSpec = tween(300)) { fullWidth -> -fullWidth }
             } else {
-                (scaleIn(
-                    initialScale = 1.15f,
-                    animationSpec = tween(420, easing = FastOutSlowInEasing)
-                ) + fadeIn(animationSpec = tween(420))) togetherWith
-                    (scaleOut(
-                        targetScale = 0.8f,
-                        animationSpec = tween(420, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(300)))
+                slideInHorizontally(animationSpec = tween(300)) { fullWidth -> -fullWidth } togetherWith
+                    slideOutHorizontally(animationSpec = tween(300)) { fullWidth -> fullWidth }
             }
         },
         label = "screenTransition"
@@ -121,15 +114,25 @@ fun AppRoot() {
 
 // ---------- Live battery state ----------
 
-private data class BatteryState(val percent: Int, val isCharging: Boolean)
+private data class BatteryState(
+    val percent: Int,
+    val isCharging: Boolean,
+    val currentNowMa: Int // + charging, - discharging (sign varies by device, we normalize below)
+)
 
 @Composable
 private fun rememberBatteryState(): BatteryState {
     val context = LocalContext.current
-    var state by remember { mutableStateOf(BatteryState(0, false)) }
+    var state by remember { mutableStateOf(BatteryState(0, false, 0)) }
 
     DisposableEffect(Unit) {
         val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+
+        fun readCurrentMa(): Int {
+            val microAmps = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) ?: 0
+            return microAmps / 1000
+        }
 
         fun update(intent: Intent?) {
             if (intent == null) return
@@ -139,7 +142,7 @@ private fun rememberBatteryState(): BatteryState {
             val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
             val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
                 status == BatteryManager.BATTERY_STATUS_FULL
-            state = BatteryState(pct, charging)
+            state = BatteryState(pct, charging, readCurrentMa())
         }
 
         val receiver = object : BroadcastReceiver() {
@@ -160,6 +163,36 @@ private fun rememberBatteryState(): BatteryState {
 @Composable
 fun HomeScreen(onOpenChargeSpeed: () -> Unit) {
     val battery = rememberBatteryState()
+    val context = LocalContext.current
+    var monitorEnabled by remember { mutableStateOf(BatteryMonitorService.isRunning) }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            BatteryMonitorService.start(context)
+            monitorEnabled = true
+        } else {
+            monitorEnabled = false
+        }
+    }
+
+    fun toggleMonitor(enabled: Boolean) {
+        if (enabled) {
+            val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            if (needsPermission) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                BatteryMonitorService.start(context)
+                monitorEnabled = true
+            }
+        } else {
+            BatteryMonitorService.stop(context)
+            monitorEnabled = false
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -171,7 +204,7 @@ fun HomeScreen(onOpenChargeSpeed: () -> Unit) {
         Spacer(Modifier.height(12.dp))
 
         Text(
-            "Battery",
+            "Ampify",
             style = MaterialTheme.typography.displaySmall,
             fontWeight = FontWeight.Bold
         )
@@ -203,40 +236,29 @@ fun HomeScreen(onOpenChargeSpeed: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
+        if (battery.isCharging) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Charging speed: ${kotlin.math.abs(battery.currentNowMa)} mA",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+            )
+        }
+
         Spacer(Modifier.height(28.dp))
 
         SettingsCard(
             title = "Charge Control",
-            subtitle = "Limit charging current to reduce heat and battery wear",
+            subtitle = null,
             enabled = true,
             onClick = onOpenChargeSpeed
         )
 
         Spacer(Modifier.height(14.dp))
 
-        SettingsCard(
-            title = "Thermal Profiles",
-            subtitle = "Coming soon",
-            enabled = false,
-            onClick = {}
-        )
-
-        Spacer(Modifier.height(14.dp))
-
-        SettingsCard(
-            title = "Power Profile",
-            subtitle = "Coming soon",
-            enabled = false,
-            onClick = {}
-        )
-
-        Spacer(Modifier.height(14.dp))
-
-        SettingsCard(
-            title = "Battery usage",
-            subtitle = "Coming soon",
-            enabled = false,
-            onClick = {}
+        MonitorToggleCard(
+            enabled = monitorEnabled,
+            onToggle = { toggleMonitor(it) }
         )
 
         Spacer(Modifier.height(24.dp))
@@ -266,7 +288,7 @@ private fun BatteryLevelBar(percent: Int) {
 @Composable
 private fun SettingsCard(
     title: String,
-    subtitle: String,
+    subtitle: String?,
     enabled: Boolean,
     onClick: () -> Unit
 ) {
@@ -287,7 +309,7 @@ private fun SettingsCard(
                 interactionSource = interactionSource,
                 indication = LocalIndication.current
             ) { onClick() },
-        shape = RoundedCornerShape(24.dp),
+        shape = SharpCardShape,
         colors = CardDefaults.cardColors(
             containerColor = if (enabled)
                 MaterialTheme.colorScheme.surfaceVariant
@@ -303,13 +325,52 @@ private fun SettingsCard(
                 color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
                         else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
             )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-            )
+            if (!subtitle.isNullOrBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MonitorToggleCard(
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = SharpCardShape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Battery Monitor",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Show live active/idle drain in a notification",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Switch(checked = enabled, onCheckedChange = onToggle)
         }
     }
 }
@@ -370,7 +431,10 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                 }
             }
             rootGranted == false -> {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Card(
+                    shape = SharpCardShape,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                ) {
                     Text(
                         "Root access was not granted. This app requires a rooted device with Magisk (or similar) and root must be allowed for this app.",
                         modifier = Modifier.padding(16.dp)
@@ -378,7 +442,10 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                 }
             }
             !nodesPresent -> {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Card(
+                    shape = SharpCardShape,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+                ) {
                     Text(
                         "This device's kernel doesn't expose /sys/class/qcom-battery/restrict_chg or restrict_cur.",
                         modifier = Modifier.padding(16.dp)
@@ -386,7 +453,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                 }
             }
             else -> {
-                ElevatedCard {
+                ElevatedCard(shape = SharpCardShape) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
