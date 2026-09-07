@@ -1,35 +1,24 @@
-
 package com.example.batteryrestrict
 
-import android.Manifest
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -40,10 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -84,8 +70,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Card shape matching the reference screenshot: soft, generously rounded corners.
-private val AppCardShape = RoundedCornerShape(28.dp)
+// ---------- Card design tokens ----------
+internal val CardShape = RoundedCornerShape(32.dp)
+internal val CardBackground = Color(0xFF232B29)
+internal val CardTitleColor = Color(0xFFEFF3F1)
+internal val CardSubtitleColor = Color(0xFF9CA6A2)
 
 private enum class Screen { Home, ChargeSpeed, BatteryMonitor }
 
@@ -121,8 +110,6 @@ fun AppRoot() {
     }
 }
 
-// ---------- Live battery state ----------
-
 private data class BatteryState(
     val percent: Int,
     val isCharging: Boolean,
@@ -134,39 +121,28 @@ private fun rememberBatteryState(): BatteryState {
     val context = LocalContext.current
     var state by remember { mutableStateOf(BatteryState(0, false, 0)) }
 
-    DisposableEffect(Unit) {
+    LaunchedEffect(Unit) {
         val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
 
-        fun readCurrentMa(): Int {
-            val microAmps = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) ?: 0
-            return microAmps / 1000
+        while (true) {
+            val intent = context.registerReceiver(null, filter)
+            if (intent != null) {
+                val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                val pct = if (level >= 0 && scale > 0) (level * 100 / scale) else 0
+                val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    status == BatteryManager.BATTERY_STATUS_FULL
+                val microAmps = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) ?: 0
+                state = BatteryState(pct, charging, microAmps / 1000)
+            }
+            delay(1_000)
         }
-
-        fun update(intent: Intent?) {
-            if (intent == null) return
-            val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-            val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-            val pct = if (level >= 0 && scale > 0) (level * 100 / scale) else 0
-            val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
-            val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-                status == BatteryManager.BATTERY_STATUS_FULL
-            state = BatteryState(pct, charging, readCurrentMa())
-        }
-
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context?, intent: Intent?) = update(intent)
-        }
-
-        val sticky = context.registerReceiver(receiver, filter)
-        update(sticky)
-
-        onDispose { context.unregisterReceiver(receiver) }
     }
 
     return state
 }
-// ---------- Home screen (Settings-style) ----------
 
 @Composable
 fun HomeScreen(
@@ -231,7 +207,6 @@ fun HomeScreen(
         SettingsCard(
             title = "Charge Control",
             subtitle = null,
-            enabled = true,
             onClick = onOpenChargeSpeed
         )
 
@@ -240,7 +215,6 @@ fun HomeScreen(
         SettingsCard(
             title = "Battery Monitor",
             subtitle = null,
-            enabled = true,
             onClick = onOpenBatteryMonitor
         )
 
@@ -272,56 +246,50 @@ private fun BatteryLevelBar(percent: Int) {
 private fun SettingsCard(
     title: String,
     subtitle: String?,
-    enabled: Boolean,
     onClick: () -> Unit
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val isPressed by interactionSource.collectIsPressedAsState()
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.97f else 1f,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
-        label = "settingsCardScale"
-    )
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer { scaleX = scale; scaleY = scale }
             .clickable(
-                enabled = enabled,
                 interactionSource = interactionSource,
                 indication = LocalIndication.current
             ) { onClick() },
-        shape = AppCardShape,
-        colors = CardDefaults.cardColors(
-            containerColor = if (enabled)
-                MaterialTheme.colorScheme.surfaceVariant
-            else
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        )
+        shape = CardShape,
+        colors = CardDefaults.cardColors(containerColor = CardBackground)
     ) {
         Column(modifier = Modifier.padding(24.dp)) {
             Text(
                 title,
-                style = MaterialTheme.typography.headlineSmall,
+                fontSize = 26.sp,
                 fontWeight = FontWeight.Bold,
-                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                color = CardTitleColor
             )
             if (!subtitle.isNullOrBlank()) {
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 Text(
                     subtitle,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    fontSize = 18.sp,
+                    lineHeight = 24.sp,
+                    color = CardSubtitleColor
                 )
             }
         }
     }
 }
+package com.example.batteryrestrict
 
-// ---------- Charge Control detail screen ----------
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 @Composable
 fun ChargeSpeedScreen(onBack: () -> Unit) {
@@ -378,7 +346,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
             }
             rootGranted == false -> {
                 Card(
-                    shape = AppCardShape,
+                    shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
                 ) {
                     Text(
@@ -389,7 +357,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
             }
             !nodesPresent -> {
                 Card(
-                    shape = AppCardShape,
+                    shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
                 ) {
                     Text(
@@ -399,7 +367,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                 }
             }
             else -> {
-                ElevatedCard(shape = AppCardShape) {
+                ElevatedCard(shape = RoundedCornerShape(24.dp)) {
                     Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -465,14 +433,31 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
         }
     }
 }
-// ---------- Battery Monitor detail screen ----------
+package com.example.batteryrestrict
+
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 
 @Composable
 fun BatteryMonitorScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var monitorEnabled by remember { mutableStateOf(BatteryMonitorService.isRunning) }
     var stats by remember { mutableStateOf(BatteryStatsStore.readStats(context)) }
-    var history by remember { mutableStateOf(BatteryStatsStore.readHistory(context)) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -502,11 +487,9 @@ fun BatteryMonitorScreen(onBack: () -> Unit) {
         }
     }
 
-    // Poll stats every couple seconds while this screen is visible so the table/graph stay fresh.
     LaunchedEffect(monitorEnabled) {
         while (true) {
             stats = BatteryStatsStore.readStats(context)
-            history = BatteryStatsStore.readHistory(context)
             delay(2_000)
         }
     }
@@ -532,11 +515,10 @@ fun BatteryMonitorScreen(onBack: () -> Unit) {
             fontWeight = FontWeight.Bold
         )
 
-        // Enable/disable card
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = AppCardShape,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            shape = CardShape,
+            colors = CardDefaults.cardColors(containerColor = CardBackground)
         ) {
             Row(
                 modifier = Modifier
@@ -548,15 +530,15 @@ fun BatteryMonitorScreen(onBack: () -> Unit) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         "Monitor service",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = CardTitleColor
                     )
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text(
                         if (monitorEnabled) "Running — updates every 10s" else "Stopped",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        fontSize = 16.sp,
+                        color = CardSubtitleColor
                     )
                 }
                 Spacer(Modifier.width(12.dp))
@@ -564,19 +546,19 @@ fun BatteryMonitorScreen(onBack: () -> Unit) {
             }
         }
 
-        // Stats table
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = AppCardShape,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            shape = CardShape,
+            colors = CardDefaults.cardColors(containerColor = CardBackground)
         ) {
             Column(modifier = Modifier.padding(24.dp)) {
                 Text(
                     "Current session",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = CardTitleColor
                 )
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
 
                 StatRow("Battery", "${stats.percent}%")
                 StatRow("Active drain", "${"%.1f".format(stats.activeDrainPerHr)}%/hr")
@@ -585,38 +567,6 @@ fun BatteryMonitorScreen(onBack: () -> Unit) {
                 StatRow("Screen off", formatDuration(stats.screenOffMs))
                 StatRow("Deep sleep", formatDuration(stats.deepSleepMs))
                 StatRow("Awake", formatDuration(stats.awakeMs))
-            }
-        }
-
-        // Hourly drain graph
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = AppCardShape,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Column(modifier = Modifier.padding(24.dp)) {
-                Text(
-                    "Drain per hour",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "% battery used, by hour of day",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-                Spacer(Modifier.height(16.dp))
-
-                if (history.isEmpty()) {
-                    Text(
-                        "Not enough data yet — check back after the monitor has run a while.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                } else {
-                    HourlyDrainChart(history = history)
-                }
             }
         }
 
@@ -632,67 +582,20 @@ private fun StatRow(label: String, value: String) {
             .padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Text(label, fontSize = 16.sp, color = CardSubtitleColor)
+        Text(value, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = CardTitleColor)
     }
-    HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f))
+    HorizontalDivider(color = CardSubtitleColor.copy(alpha = 0.15f))
 }
 
 private fun formatDuration(ms: Long): String {
     val totalSeconds = ms / 1000
     val h = totalSeconds / 3600
     val m = (totalSeconds % 3600) / 60
-    return if (h > 0) "${h}h ${m}m" else "${m}m"
-}
-
-@Composable
-private fun HourlyDrainChart(history: List<Pair<String, Float>>) {
-    val barColor = MaterialTheme.colorScheme.primary
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-    val maxValue = (history.maxOfOrNull { it.second } ?: 1f).coerceAtLeast(1f)
-
-    Column {
-        Canvas(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(160.dp)
-        ) {
-            val barCount = history.size
-            val gap = 8.dp.toPx()
-            val barWidth = (size.width - gap * (barCount - 1).coerceAtLeast(0)) / barCount
-            history.forEachIndexed { index, (_, value) ->
-                val barHeight = (value / maxValue) * size.height
-                val left = index * (barWidth + gap)
-                drawRect(
-                    color = barColor,
-                    topLeft = Offset(left, size.height - barHeight),
-                    size = Size(barWidth, barHeight)
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
-            history.forEachIndexed { index, (label, _) ->
-                if (index % 2 == 0 || history.size <= 8) {
-                    Text(
-                        text = label.take(2),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = labelColor,
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    Spacer(modifier = Modifier.weight(1f))
-                }
-            }
-        }
+    val s = totalSeconds % 60
+    return when {
+        h > 0 -> "${h}h ${m}m"
+        m > 0 -> "${m}m ${s}s"
+        else -> "${s}s"
     }
 }
