@@ -5,7 +5,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -32,6 +34,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.topjohnwu.superuser.Shell
 
 class MainActivity : ComponentActivity() {
@@ -47,6 +50,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         setContent {
             val dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
             val darkTheme = isSystemInDarkTheme()
@@ -80,11 +84,23 @@ fun AppRoot() {
         targetState = screen,
         transitionSpec = {
             if (targetState == Screen.ChargeSpeed) {
-                (scaleIn(initialScale = 0.85f, animationSpec = tween(220)) + fadeIn(animationSpec = tween(220))) togetherWith
-                    (scaleOut(targetScale = 1.1f, animationSpec = tween(220)) + fadeOut(animationSpec = tween(220)))
+                (scaleIn(
+                    initialScale = 0.8f,
+                    animationSpec = tween(420, easing = FastOutSlowInEasing)
+                ) + fadeIn(animationSpec = tween(420))) togetherWith
+                    (scaleOut(
+                        targetScale = 1.15f,
+                        animationSpec = tween(420, easing = FastOutSlowInEasing)
+                    ) + fadeOut(animationSpec = tween(300)))
             } else {
-                (scaleIn(initialScale = 1.1f, animationSpec = tween(220)) + fadeIn(animationSpec = tween(220))) togetherWith
-                    (scaleOut(targetScale = 0.85f, animationSpec = tween(220)) + fadeOut(animationSpec = tween(220)))
+                (scaleIn(
+                    initialScale = 1.15f,
+                    animationSpec = tween(420, easing = FastOutSlowInEasing)
+                ) + fadeIn(animationSpec = tween(420))) togetherWith
+                    (scaleOut(
+                        targetScale = 0.8f,
+                        animationSpec = tween(420, easing = FastOutSlowInEasing)
+                    ) + fadeOut(animationSpec = tween(300)))
             }
         },
         label = "screenTransition"
@@ -112,7 +128,12 @@ fun HomeScreen(onOpenChargeSpeed: () -> Unit) {
         FeatureCard("More tools", "Coming soon", "🛠️", false, {})
     )
 
-    Column(modifier = Modifier.fillMaxSize().padding(20.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.systemBars)
+            .padding(20.dp)
+    ) {
         Text("Battery Tools", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(20.dp))
 
@@ -202,20 +223,25 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.systemBars)
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Text("←", style = MaterialTheme.typography.headlineSmall)
-            }
-            Spacer(Modifier.width(4.dp))
-            Text(
-                "Change charge speed",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
+        // Small circular back button, standalone, settings-style
+        FilledTonalIconButton(
+            onClick = onBack,
+            modifier = Modifier.size(40.dp)
+        ) {
+            Text("←", fontSize = 20.sp)
         }
+
+        Text(
+            "Control speed",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold
+        )
 
         when {
             rootGranted == null -> {
