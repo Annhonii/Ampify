@@ -1,8 +1,8 @@
 name: Build APK
 
 on:
-push:
   workflow_dispatch:
+  push:
     branches: [ main ]
 
 permissions:
@@ -37,12 +37,3 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: latest
-          name: Latest Build
-          body: Automated debug build from the latest commit.
-          files: app/build/outputs/apk/debug/*.apk
-          make_latest: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
