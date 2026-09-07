@@ -1,5 +1,6 @@
 package com.example.batteryrestrict
 
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -8,6 +9,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
@@ -17,17 +19,17 @@ import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.topjohnwu.superuser.Shell
@@ -46,7 +48,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            val dynamicColorSupported = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            val darkTheme = isSystemInDarkTheme()
+            val context = LocalContext.current
+            val colorScheme = when {
+                dynamicColorSupported && darkTheme -> dynamicDarkColorScheme(context)
+                dynamicColorSupported && !darkTheme -> dynamicLightColorScheme(context)
+                darkTheme -> darkColorScheme()
+                else -> lightColorScheme()
+            }
+            MaterialTheme(colorScheme = colorScheme) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     AppRoot()
                 }
@@ -61,8 +72,6 @@ private enum class Screen { Home, ChargeSpeed }
 fun AppRoot() {
     var screen by remember { mutableStateOf(Screen.Home) }
 
-    // Hardware/gesture back button: if we're on a sub-screen, go back to
-    // the home screen with cards instead of exiting the app.
     BackHandler(enabled = screen != Screen.Home) {
         screen = Screen.Home
     }
@@ -71,13 +80,11 @@ fun AppRoot() {
         targetState = screen,
         transitionSpec = {
             if (targetState == Screen.ChargeSpeed) {
-                // Opening a card: zoom out into it
-                (scaleIn(initialScale = 1.1f) + fadeIn()) togetherWith
-                    (scaleOut(targetScale = 0.9f) + fadeOut())
+                (scaleIn(initialScale = 0.85f, animationSpec = tween(220)) + fadeIn(animationSpec = tween(220))) togetherWith
+                    (scaleOut(targetScale = 1.1f, animationSpec = tween(220)) + fadeOut(animationSpec = tween(220)))
             } else {
-                // Going back: zoom in back to the grid
-                (scaleIn(initialScale = 0.9f) + fadeIn()) togetherWith
-                    (scaleOut(targetScale = 1.1f) + fadeOut())
+                (scaleIn(initialScale = 1.1f, animationSpec = tween(220)) + fadeIn(animationSpec = tween(220))) togetherWith
+                    (scaleOut(targetScale = 0.85f, animationSpec = tween(220)) + fadeOut(animationSpec = tween(220)))
             }
         },
         label = "screenTransition"
@@ -174,8 +181,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
     var rootGranted by remember { mutableStateOf<Boolean?>(null) }
     var nodesPresent by remember { mutableStateOf(true) }
     var restrictEnabled by remember { mutableStateOf(false) }
-    // Displayed and edited in mA; converted to/from the raw µA sysfs value.
-    var currentInputMa by remember { mutableStateOf("1000") }
+    var currentInputMa by remember { mutableStateOf("1500") }
     var status by remember { mutableStateOf<String?>(null) }
     var isError by remember { mutableStateOf(false) }
 
@@ -187,8 +193,10 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                 RootUtils.nodeExists("/sys/class/qcom-battery/restrict_cur")
             if (nodesPresent) {
                 restrictEnabled = RootUtils.readRestrictChg() == "1"
-                val curRaw = RootUtils.readRestrictCur().toIntOrNull()
-                if (curRaw != null) currentInputMa = (curRaw / 1000).toString()
+                val curMicroAmps = RootUtils.readRestrictCur().toIntOrNull()
+                if (curMicroAmps != null && curMicroAmps > 0) {
+                    currentInputMa = (curMicroAmps / 1000).toString()
+                }
             }
         }
     }
@@ -199,12 +207,12 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                Text("←", style = MaterialTheme.typography.headlineSmall)
             }
             Spacer(Modifier.width(4.dp))
             Text(
-                "Change Charge Speed",
-                style = MaterialTheme.typography.headlineSmall,
+                "Change charge speed",
+                style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
         }
@@ -241,11 +249,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                "Enable services",
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Text("Enable services", style = MaterialTheme.typography.titleMedium)
                             Switch(
                                 checked = restrictEnabled,
                                 onCheckedChange = { checked ->
@@ -268,9 +272,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                         OutlinedTextField(
                             value = currentInputMa,
                             onValueChange = { input -> currentInputMa = input.filter { it.isDigit() } },
-                            label = { Text("Milliamps (mA)") },
-                            placeholder = { Text("e.g. 1200, 1500") },
-                            suffix = { Text("mA") },
+                            label = { Text("mA (e.g. 1200, 1500)") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -284,7 +286,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                                 } else {
                                     val microAmps = ma * 1000
                                     val ok = RootUtils.setRestrictCur(microAmps)
-                                    status = if (ok) "Charge speed set to ${ma}mA" else "Failed to set charge speed"
+                                    status = if (ok) "Charge current set to ${ma}mA" else "Failed to set charge current"
                                     isError = !ok
                                 }
                             },
