@@ -5,7 +5,7 @@
 <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:allowBackup="true"
-        android:icon="@android:drawable/ic_lock_power_off"
+        android:icon="@drawable/app_icon"
         android:label="Ampify"
         android:theme="@style/Theme.Material3.DayNight.NoActionBar"
         android:supportsRtl="true">
