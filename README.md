@@ -1,19 +1,3 @@
-# Battery Restrict (Material 3, Root)
-
-A small rooted-device app that toggles and sets these kernel sysfs nodes:
-
-- `/sys/class/qcom-battery/restrict_chg` — write `1`/`0` to enable/disable charge restriction
-- `/sys/class/qcom-battery/restrict_cur` — write an integer (mA) to cap charge current
-
-These nodes are kernel-specific (some Qualcomm-based custom kernels/OEM builds). If your
-device doesn't have them, the app will tell you so rather than silently failing.
-
-## How to build this from your phone (no PC needed)
-
-1. Create a new **public or private GitHub repo** (e.g. `battery-restrict`).
-2. Upload every file in this project to that repo, keeping the folder structure
-   (including the hidden `.github/workflows/build.yml` file). The easiest way on
-   mobile: use the GitHub app or the web UI's "Add file → Upload files" and drag
    in the whole folder (browsers on mobile support folder upload in most cases),
    or use a Git client app like **Working Copy** (iOS) / **Termux + git** (Android).
 3. Once the files are pushed to the `main` branch, go to the repo's **Actions** tab
