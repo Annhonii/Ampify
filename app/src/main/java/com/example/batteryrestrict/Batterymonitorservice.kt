@@ -20,13 +20,17 @@ import kotlin.math.abs
 import kotlin.math.max
 
 /**
- * Foreground service that keeps a persistent notification with live battery stats:
- * percent, temperature, instantaneous current, and active/idle drain rates plus a
- * breakdown of screen-on / screen-off / deep-sleep / awake time for the current session.
+ * Foreground service that keeps a persistent notification with live battery stats, scoped
+ * to the current "since last charge" session:
+ *   - percent, temperature, instantaneous current
+ *   - active/idle drain rate (%/hr)
+ *   - screen-on / screen-off / deep-sleep / awake breakdown
  *
- * Every 10 seconds (REFRESH_INTERVAL_MS) it re-samples the battery directly (not just
- * reacting to OS broadcasts) so both the drain-rate math and the notification stay
- * accurate and current even if no ACTION_BATTERY_CHANGED broadcast has fired recently.
+ * The session resets only when a real unplug is detected (charging -> discharging), and the
+ * raw accumulators are persisted so toggling the service off/on mid-session does NOT lose data
+ * — only an actual unplug starts a fresh session. Every 10s (REFRESH_INTERVAL_MS) stats are
+ * re-sampled directly from the battery (not just reacting to broadcasts) so both the notification
+ * and the drain-rate math stay accurate and current.
  *
  * NOTE: AndroidManifest.xml must declare:
  *   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -68,21 +72,17 @@ class BatteryMonitorService : Service() {
         val currentMa: Int
     )
 
-    // Session baselines
+    // "Since last charge" session state
     private var sessionStartElapsedMs = 0L
     private var sessionStartUptimeMs = 0L
-
-    // Accumulated screen-on / screen-off time (elapsed real time, ms)
     private var screenOnAccumMs = 0L
     private var screenOffAccumMs = 0L
     private var lastScreenSwitchElapsedMs = 0L
     private var screenIsOn = true
-
-    // Percent drop attributed to each state, used to compute %/hr drain.
-    // These are sampled fresh on every 10s tick (see publishStats), not just on broadcasts.
     private var activePercentDropAccum = 0.0
     private var idlePercentDropAccum = 0.0
     private var lastKnownPercent: Int? = null
+    private var lastPublishedChargingState: Boolean? = null
 
     private lateinit var batteryManager: BatteryManager
     private lateinit var notificationManager: NotificationManager
@@ -95,8 +95,6 @@ class BatteryMonitorService : Service() {
         }
     }
 
-    // Only used to wake up publishStats() promptly on a real change; the actual
-    // numbers are always re-sampled fresh inside publishStats() itself.
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == Intent.ACTION_BATTERY_CHANGED) {
@@ -120,14 +118,39 @@ class BatteryMonitorService : Service() {
         batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        val now = SystemClock.elapsedRealtime()
-        sessionStartElapsedMs = now
-        sessionStartUptimeMs = SystemClock.uptimeMillis()
-        lastScreenSwitchElapsedMs = now
-        screenIsOn = true
-
         createChannel()
         startForeground(NOTIFICATION_ID, buildNotification(sticky = "Starting…"))
+
+        val extras = fetchBatteryExtras()
+        val now = SystemClock.elapsedRealtime()
+        val nowUptime = SystemClock.uptimeMillis()
+        val persisted = BatteryStatsStore.loadSessionAccumulators(this)
+        val justUnplugged = persisted.lastChargingState == true && !extras.isCharging
+        val noPriorSession = persisted.sessionStartElapsedMs == null || persisted.lastChargingState == null
+
+        if (noPriorSession || justUnplugged) {
+            // First ever run, or we just detected an unplug: start a fresh "since last charge" session.
+            BatteryStatsStore.resetSession(this, now, nowUptime, extras.percent)
+            screenOnAccumMs = 0L
+            screenOffAccumMs = 0L
+            activePercentDropAccum = 0.0
+            idlePercentDropAccum = 0.0
+            lastKnownPercent = extras.percent
+            sessionStartElapsedMs = now
+            sessionStartUptimeMs = nowUptime
+        } else {
+            // Resume the ongoing discharge session across a service restart.
+            screenOnAccumMs = persisted.screenOnAccumMs
+            screenOffAccumMs = persisted.screenOffAccumMs
+            activePercentDropAccum = persisted.activeDrop
+            idlePercentDropAccum = persisted.idleDrop
+            lastKnownPercent = persisted.lastKnownPercent ?: extras.percent
+            sessionStartElapsedMs = persisted.sessionStartElapsedMs ?: now
+            sessionStartUptimeMs = persisted.sessionStartUptimeMs ?: nowUptime
+        }
+        lastPublishedChargingState = extras.isCharging
+        lastScreenSwitchElapsedMs = now
+        screenIsOn = true // best-effort; corrected as soon as a real SCREEN_ON/OFF broadcast fires
 
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val screenFilter = IntentFilter().apply {
@@ -136,14 +159,10 @@ class BatteryMonitorService : Service() {
         }
         registerReceiver(screenReceiver, screenFilter)
 
-        // First tick fires after REFRESH_INTERVAL_MS; publishStats() also runs
-        // immediately whenever a real battery broadcast arrives in the meantime.
         refreshHandler.postDelayed(refreshRunnable, REFRESH_INTERVAL_MS)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        return START_STICKY
-    }
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
         isRunning = false
@@ -178,21 +197,37 @@ class BatteryMonitorService : Service() {
     }
 
     /**
-     * Re-samples the battery fresh, updates the active/idle drop accumulators for
-     * whichever screen state we're currently in, and refreshes the notification + store.
-     * Called every 10s by [refreshRunnable] AND immediately on real battery broadcasts.
+     * Re-samples the battery fresh every tick, detects unplug events to reset the "since last
+     * charge" session, updates the active/idle drop accumulators, and refreshes the notification
+     * + persisted store (+ drain-vs-time history for the home screen graph).
      */
     private fun publishStats() {
         val extras = fetchBatteryExtras()
-
-        val previous = lastKnownPercent
-        if (previous != null && !extras.isCharging && extras.percent < previous) {
-            val drop = (previous - extras.percent).toDouble()
-            if (screenIsOn) activePercentDropAccum += drop else idlePercentDropAccum += drop
-        }
-        lastKnownPercent = extras.percent
-
         val now = SystemClock.elapsedRealtime()
+
+        val wasCharging = lastPublishedChargingState
+        if (wasCharging == true && !extras.isCharging) {
+            // Just unplugged -> start a brand new "since last charge" session.
+            val nowUptime = SystemClock.uptimeMillis()
+            BatteryStatsStore.resetSession(this, now, nowUptime, extras.percent)
+            screenOnAccumMs = 0L
+            screenOffAccumMs = 0L
+            activePercentDropAccum = 0.0
+            idlePercentDropAccum = 0.0
+            lastKnownPercent = extras.percent
+            sessionStartElapsedMs = now
+            sessionStartUptimeMs = nowUptime
+            lastScreenSwitchElapsedMs = now
+        } else {
+            val previous = lastKnownPercent
+            if (previous != null && !extras.isCharging && extras.percent < previous) {
+                val drop = (previous - extras.percent).toDouble()
+                if (screenIsOn) activePercentDropAccum += drop else idlePercentDropAccum += drop
+            }
+            lastKnownPercent = extras.percent
+        }
+        lastPublishedChargingState = extras.isCharging
+
         val liveScreenOnMs = screenOnAccumMs + if (screenIsOn) (now - lastScreenSwitchElapsedMs) else 0
         val liveScreenOffMs = screenOffAccumMs + if (!screenIsOn) (now - lastScreenSwitchElapsedMs) else 0
 
@@ -206,6 +241,25 @@ class BatteryMonitorService : Service() {
         val idleHours = liveScreenOffMs / 3_600_000.0
         val activeDrainPerHr = if (activeHours > 0) activePercentDropAccum / activeHours else 0.0
         val idleDrainPerHr = if (idleHours > 0) idlePercentDropAccum / idleHours else 0.0
+        val totalDropped = activePercentDropAccum + idlePercentDropAccum
+
+        BatteryStatsStore.saveSessionAccumulators(
+            this,
+            SessionAccumulators(
+                screenOnAccumMs = liveScreenOnMs,
+                screenOffAccumMs = liveScreenOffMs,
+                activeDrop = activePercentDropAccum,
+                idleDrop = idlePercentDropAccum,
+                lastKnownPercent = lastKnownPercent,
+                sessionStartElapsedMs = sessionStartElapsedMs,
+                sessionStartUptimeMs = sessionStartUptimeMs,
+                lastChargingState = extras.isCharging
+            )
+        )
+
+        if (!extras.isCharging) {
+            BatteryStatsStore.maybeAppendHistoryPoint(this, now, sessionStartElapsedMs, extras.percent)
+        }
 
         BatteryStatsStore.writeStats(
             this,
@@ -217,7 +271,8 @@ class BatteryMonitorService : Service() {
                 screenOffMs = liveScreenOffMs,
                 deepSleepMs = deepSleepMs,
                 awakeMs = awakeMs,
-                totalElapsedMs = totalElapsedMs
+                totalElapsedMs = totalElapsedMs,
+                totalPercentDropped = totalDropped
             )
         )
 
@@ -235,7 +290,8 @@ class BatteryMonitorService : Service() {
                 awakeMs = awakeMs,
                 totalElapsedMs = totalElapsedMs,
                 activeDrainPerHr = activeDrainPerHr,
-                idleDrainPerHr = idleDrainPerHr
+                idleDrainPerHr = idleDrainPerHr,
+                totalPercentDropped = totalDropped
             )
         )
     }
@@ -252,7 +308,8 @@ class BatteryMonitorService : Service() {
         awakeMs: Long = 0,
         totalElapsedMs: Long = 1,
         activeDrainPerHr: Double = 0.0,
-        idleDrainPerHr: Double = 0.0
+        idleDrainPerHr: Double = 0.0,
+        totalPercentDropped: Double = 0.0
     ): Notification {
         fun pct(part: Long) = if (totalElapsedMs > 0) part * 100.0 / totalElapsedMs else 0.0
 
@@ -264,7 +321,9 @@ class BatteryMonitorService : Service() {
             appendLine("$percent% · ${"%.0f".format(tempC)}°C · $chargeLine")
             appendLine()
             appendLine("Active drain: ${"%.1f".format(activeDrainPerHr)}%/hr · idle drain: ${"%.1f".format(idleDrainPerHr)}%/hr")
-            appendLine("Screen on: ${formatDurationShort(liveScreenOnMs)} (${"%.0f".format(pct(liveScreenOnMs))}%)")
+            // Bracket here shows total % drained since the monitor was turned on / last charge,
+            // not a time-percentage.
+            appendLine("Screen on: ${formatDurationShort(liveScreenOnMs)} (${"%.1f".format(totalPercentDropped)}% drained)")
             appendLine("Screen off: ${formatDurationShort(liveScreenOffMs)} (${"%.0f".format(pct(liveScreenOffMs))}%)")
             appendLine("Deep sleep: ${formatDurationShort(deepSleepMs)} (${"%.1f".format(pct(deepSleepMs))}%)")
             append("Awake: ${formatDurationShort(awakeMs)} (${"%.1f".format(pct(awakeMs))}%)")
@@ -293,7 +352,7 @@ class BatteryMonitorService : Service() {
         return builder.build()
     }
 
-    /** e.g. 61_000ms -> "1m 1s" (previously this showed a raw, never-rolling-over "61s"). */
+    /** e.g. 61_000ms -> "1m 1s" (never rolls past 59 without carrying into the next unit). */
     private fun formatDurationShort(ms: Long): String {
         val totalSeconds = ms / 1000
         val h = totalSeconds / 3600
