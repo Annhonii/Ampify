@@ -231,19 +231,6 @@ fun HomeScreen(
         Spacer(Modifier.height(8.dp))
         DrainLineChart(history = history)
 
-        Spacer(Modifier.height(10.dp))
-
-        Text(
-            "Screen on since last charge: ${formatDuration(monitorStats.screenOnMs)}",
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-        )
-        Text(
-            "Screen off since last charge: ${formatDuration(monitorStats.screenOffMs)}",
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-        )
-
         Spacer(Modifier.height(24.dp))
 
         SettingsCard(
