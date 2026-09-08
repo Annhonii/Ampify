@@ -267,8 +267,6 @@ class BatteryMonitorService : Service() {
                 percent = extras.percent,
                 activeDrainPerHr = activeDrainPerHr,
                 idleDrainPerHr = idleDrainPerHr,
-                screenOnMs = liveScreenOnMs,
-                screenOffMs = liveScreenOffMs,
                 deepSleepMs = deepSleepMs,
                 awakeMs = awakeMs,
                 totalElapsedMs = totalElapsedMs,
