@@ -619,18 +619,10 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         FilledTonalIconButton(
-    onClick = onBack,
-    modifier = Modifier.size(44.dp)
-) {
-    Text(
-        text = "←",
-        fontSize = 24.sp,
-        textAlign = TextAlign.Center,
-        style = TextStyle(
-            platformStyle = PlatformTextStyle(includeFontPadding = false)
-        ),
-        modifier = Modifier.offset(y = (-2).dp)
-    )
+            onClick = onBack,
+            modifier = Modifier.size(40.dp)
+        ) {
+            Text("←", fontSize = 35.sp)
         }
         Text(
             "Charge Control",
