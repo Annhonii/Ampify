@@ -236,7 +236,7 @@ fun HomeScreen(
         Spacer(Modifier.height(12.dp))
 
         Text(
-            "Total SOT: ${formatDuration(monitorStats.monitorScreenOnMs + monitorStats.monitorScreenOffMs)}",
+            "Active Since: ${formatDuration(monitorStats.monitorScreenOnMs + monitorStats.monitorScreenOffMs)}",
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
         )
