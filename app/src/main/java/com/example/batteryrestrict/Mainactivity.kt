@@ -227,15 +227,7 @@ fun HomeScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
             )
         }
-
-        Spacer(Modifier.height(20.dp))
-
-        Text(
-            "Drain since last charge",
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
-        )
+        
         Spacer(Modifier.height(8.dp))
         DrainLineChart(history = history)
 
