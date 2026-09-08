@@ -622,7 +622,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
             onClick = onBack,
             modifier = Modifier.size(40.dp)
         ) {
-            Text("←", fontSize = 20.sp)
+            Text("←", fontSize = 26.sp)
         }
 
         Text(
