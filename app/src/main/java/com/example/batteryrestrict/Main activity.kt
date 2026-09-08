@@ -561,7 +561,7 @@ private fun BackButton(onBack: () -> Unit) {
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            Text("←", fontSize = 26.sp)
+            Text("←", fontSize = 32.sp)
         }
     }
 }
