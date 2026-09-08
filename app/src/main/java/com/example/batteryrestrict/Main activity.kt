@@ -254,7 +254,8 @@ fun HomeScreen(
 
         SettingsCard(
             title = "Charge Control",
-            subtitle = "Limit charging current to reduce heat and battery wear",
+            titleFontSize = 18.
+            subtitle = "null",
             onClick = onOpenChargeSpeed
         )
 
@@ -262,7 +263,8 @@ fun HomeScreen(
 
         SettingsCard(
             title = "Battery Monitor",
-            subtitle = "Track drain, screen on time and deep sleep in real time",
+            titleFontSize = 18.
+            subtitle = "null",
             onClick = onOpenBatteryMonitor
         )
 
