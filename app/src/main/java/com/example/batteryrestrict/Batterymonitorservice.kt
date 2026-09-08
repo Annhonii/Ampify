@@ -323,8 +323,8 @@ class BatteryMonitorService : Service() {
             appendLine("Active drain: ${"%.1f".format(activeDrainPerHr)}%/hr · idle drain: ${"%.1f".format(idleDrainPerHr)}%/hr")
             // Bracket here shows total % drained since the monitor was turned on / last charge,
             // not a time-percentage.
-            appendLine("Screen on: ${formatDurationShort(liveScreenOnMs)} (${"%.1f".format(totalPercentDropped)}% drained)")
-            appendLine("Screen off: ${formatDurationShort(liveScreenOffMs)} (${"%.0f".format(pct(liveScreenOffMs))}%)")
+            appendLine("Screen on: ${formatDurationShort(liveScreenOnMs)} (${"%.1f".format(totalPercentDropped)}%)")
+            appendLine("Screen off: ${formatDurationShort(liveScreenOffMs)} (${"%.1f".format(totalPercentDropped)}%)")
             appendLine("Deep sleep: ${formatDurationShort(deepSleepMs)} (${"%.1f".format(pct(deepSleepMs))}%)")
             append("Awake: ${formatDurationShort(awakeMs)} (${"%.1f".format(pct(awakeMs))}%)")
         }
