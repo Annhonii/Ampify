@@ -622,7 +622,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
             onClick = onBack,
             modifier = Modifier.size(40.dp)
         ) {
-            Text("←", fontSize = 26.sp)
+            Text("←", fontSize = 35.sp)
         }
 
         Text(
@@ -692,7 +692,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
                         OutlinedTextField(
                             value = currentInputMa,
                             onValueChange = { input -> currentInputMa = input.filter { it.isDigit() } },
-                            label = { Text("in milliamps") },
+                            label = { Text("In mA") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
