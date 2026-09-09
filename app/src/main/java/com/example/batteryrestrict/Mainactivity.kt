@@ -846,7 +846,7 @@ fun BatteryMonitorScreen(onBack: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         BackButton(onBack)
-
+        Spacer(Modifier.height(16.dp)) 
         Text(
             "Battery Monitor",
             style = MaterialTheme.typography.headlineMedium,
