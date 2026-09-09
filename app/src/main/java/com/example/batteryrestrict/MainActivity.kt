@@ -273,13 +273,13 @@ fun HomeScreen(
             HomeActionCard(
                 title = "Charging\nControl",
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(1f),
                 onClick = onOpenChargeSpeed
             )
             HomeActionCard(
                 title = "Battery\nMonitor",
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(1f),
                 onClick = onOpenBatteryMonitor
             )
         }
