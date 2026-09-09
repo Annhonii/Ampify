@@ -617,7 +617,7 @@ private fun BackButton(onBack: () -> Unit) {
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            Canvas(modifier = Modifier.size(24.dp)) {
+            Canvas(modifier = Modifier.size(22.dp)) {
                 val strokeWidth = 2.5.dp.toPx()
                 val centerY = size.height * 0.5f
                 val tip = size.width * 0.12f
@@ -846,9 +846,10 @@ fun BatteryMonitorScreen(onBack: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         BackButton(onBack)
-        Spacer(Modifier.height(16.dp)) 
+        Spacer(Modifier.height(20.dp)) 
         Text(
             "Battery Monitor",
+            fontSize = 28.sp
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold
         )
