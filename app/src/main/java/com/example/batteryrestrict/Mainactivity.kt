@@ -617,7 +617,7 @@ private fun BackButton(onBack: () -> Unit) {
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            Canvas(modifier = Modifier.size(22.dp)) {
+            Canvas(modifier = Modifier.size(20.dp)) {
                 val strokeWidth = 2.5.dp.toPx()
                 val centerY = size.height * 0.5f
                 val tip = size.width * 0.12f
