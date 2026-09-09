@@ -608,7 +608,7 @@ private fun StatChip(label: String, value: String, modifier: Modifier = Modifier
 private fun BackButton(onBack: () -> Unit) {
     Surface(
         onClick = onBack,
-        modifier = Modifier.size(56.dp),
+        modifier = Modifier.size(40.dp),
         shape = CircleShape,
         color = MaterialTheme.colorScheme.primary,
         contentColor = Color.White
@@ -617,7 +617,7 @@ private fun BackButton(onBack: () -> Unit) {
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            Canvas(modifier = Modifier.size(28.dp)) {
+            Canvas(modifier = Modifier.size(26.dp)) {
                 val strokeWidth = 2.5.dp.toPx()
                 val centerY = size.height * 0.5f
                 val tip = size.width * 0.12f
