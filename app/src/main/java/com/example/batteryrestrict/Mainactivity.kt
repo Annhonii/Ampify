@@ -849,7 +849,7 @@ fun BatteryMonitorScreen(onBack: () -> Unit) {
         Spacer(Modifier.height(20.dp)) 
         Text(
             "Battery Monitor",
-            fontSize = 28.sp
+            style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold
         )
 
