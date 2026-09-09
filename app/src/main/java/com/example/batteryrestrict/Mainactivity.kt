@@ -610,7 +610,7 @@ private fun BackButton(onBack: () -> Unit) {
         onClick = onBack,
         modifier = Modifier.size(40.dp),
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.primary,
+        color = MaterialTheme.colorScheme.primarycontainer,
         contentColor = Color.White
     ) {
         Box(
@@ -626,29 +626,29 @@ private fun BackButton(onBack: () -> Unit) {
                 val headSpread = size.height * 0.32f
 
                 // Horizontal shaft.
-                drawLine(
-                    color = Color.White,
-                    start = Offset(tip, centerY),
-                    end = Offset(shaftEnd, centerY),
-                    strokeWidth = strokeWidth,
-                    cap = StrokeCap.Round
-                )
-                // Arrowhead, upper wing.
-                drawLine(
-                    color = Color.White,
-                    start = Offset(tip, centerY),
-                    end = Offset(tip + headLength, centerY - headSpread),
-                    strokeWidth = strokeWidth,
-                    cap = StrokeCap.Round
-                )
-                // Arrowhead, lower wing.
-                drawLine(
-                    color = Color.White,
-                    start = Offset(tip, centerY),
-                    end = Offset(tip + headLength, centerY + headSpread),
-                    strokeWidth = strokeWidth,
-                    cap = StrokeCap.Round
-                )
+drawLine(
+    color = MaterialTheme.colorScheme.onPrimaryContainer,
+    start = Offset(tip, centerY),
+    end = Offset(shaftEnd, centerY),
+    strokeWidth = strokeWidth,
+    cap = StrokeCap.Round
+)
+// Arrowhead, upper wing.
+drawLine(
+    color = MaterialTheme.colorScheme.onPrimaryContainer,
+    start = Offset(tip, centerY),
+    end = Offset(tip + headLength, centerY - headSpread),
+    strokeWidth = strokeWidth,
+    cap = StrokeCap.Round
+)
+// Arrowhead, lower wing.
+drawLine(
+    color = MaterialTheme.colorScheme.onPrimaryContainer,
+    start = Offset(tip, centerY),
+    end = Offset(tip + headLength, centerY + headSpread),
+    strokeWidth = strokeWidth,
+    cap = StrokeCap.Round
+)
             }
         }
     }
