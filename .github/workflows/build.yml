@@ -41,8 +41,9 @@ jobs:
         with:
           tag_name: latest
           name: Ampify Apk
-          body: This app is developed based on personal needs and interest. 
-          I will continue to push updates and add features whenever necessary or as inspiration strikes.
+          body: >
+            This app is developed based on personal needs and interest.
+            I will continue to push updates and add features whenever necessary or as inspiration strikes.
           files: app/build/outputs/apk/debug/*.apk
           make_latest: true
         env:
