@@ -680,10 +680,10 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         BackButton(onBack)
+        Spacer(Modifier.height(20.dp))
 
         Text(
             "Charge Control",
-            Spacer(Modifier.height(20.dp))
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold
         )
