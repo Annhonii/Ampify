@@ -683,6 +683,7 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
 
         Text(
             "Charge Control",
+            Spacer(Modifier.height(20.dp))
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold
         )
