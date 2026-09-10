@@ -181,6 +181,15 @@ object BatteryStatsStore {
         p.edit().putString(KEY_HOURLY_HISTORY, entries.joinToString(",")).apply()
     }
 
+    /**
+     * Clears just the persisted hourly graph history, without touching the current-session
+     * accumulators/snapshot. Used when the user manually turns the monitor off, so the Home
+     * graph goes back to "not enough data yet" instead of showing stale points.
+     */
+    fun clearHourlyHistory(context: Context) {
+        prefs(context).edit().remove(KEY_HOURLY_HISTORY).apply()
+    }
+
     /** Returns (displayLabel, percent) oldest -> newest, e.g. ("3 pm", 62). */
     fun readHourlyHistory(context: Context): List<Pair<String, Int>> {
         val existing = prefs(context).getString(KEY_HOURLY_HISTORY, "") ?: ""
