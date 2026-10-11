@@ -1,3 +1,5 @@
+@file:OptIn(ExperimentalFoundationApi::class)
+
 package com.example.batteryrestrict
 
 import android.Manifest
@@ -14,42 +16,41 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.*
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
 
@@ -65,104 +66,85 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent {
-            val context = LocalContext.current
-            val darkTheme = isSystemInDarkTheme()
-            val colorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-            } else if (darkTheme) {
-                darkColorScheme()
-            } else {
-                lightColorScheme()
-            }
-            MaterialTheme(
-                colorScheme = colorScheme,
-                typography = Typography()
-            ) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = colorScheme.background
-                ) {
-                    AppRoot()
-                }
-            }
-        }
+        setContent { AmpifyTheme { AppRoot() } }
     }
 }
 
-private val OuterCardCorner = 28.dp
-private val MaroonAccent = Color(0xFF8B3A2B)
-private val LightCardGray = Color(0xFFE6E6E6)
-private val DarkCardGray = Color(0xFF303030)
-
-@Composable
-private fun appCardColor(): Color {
-    return if (isSystemInDarkTheme()) DarkCardGray else LightCardGray
-}
-
-@Composable
-private fun maroonSwitchColors(): SwitchColors {
-    return SwitchDefaults.colors(
-        checkedThumbColor = Color.White,
-        checkedTrackColor = MaterialTheme.colorScheme.primary,
-        checkedBorderColor = MaterialTheme.colorScheme.primary,
-        uncheckedThumbColor = MaterialTheme.colorScheme.outline,
-        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
-        uncheckedBorderColor = MaterialTheme.colorScheme.outline
-    )
-}
-
-private enum class Screen { Home, ChargeSpeed, BatteryMonitor }
+// ---------- root: title, swipeable pages, floating nav pill ----------
 
 @Composable
 fun AppRoot() {
-    var screen by remember { mutableStateOf(Screen.Home) }
+    val p = LocalPalette.current
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val pager = rememberPagerState(pageCount = { 3 })
 
-    fun openScreen(target: Screen) {
-        screen = target
+    BackHandler(enabled = pager.currentPage != 0) {
+        scope.launch { pager.animateScrollToPage(0) }
     }
 
-    fun closeScreen() {
-        screen = Screen.Home
-    }
+    // The nav pill slides away when the keyboard opens; pages keep their content clear of it.
+    val imeOpen = WindowInsets.ime.getBottom(density) > 0
+    val navInset = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
+    val reserve by animateDpAsState(
+        if (imeOpen) 8.dp else 72.dp + navInset,
+        tween(300, easing = FastOutSlowInEasing), label = "reserve",
+    )
+    var started by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { started = true }
 
-    BackHandler(enabled = screen != Screen.Home) { closeScreen() }
+    CompositionLocalProvider(LocalBottomReserve provides reserve) {
+        Box(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Ampify", style = Type.headline)
+                    Spacer(Modifier.width(8.dp))
+                    Box(Modifier.size(9.dp).clip(CircleShape).background(p.accent))
+                }
 
-    AnimatedContent(
-        targetState = screen,
-        transitionSpec = {
-            if (targetState == Screen.Home) {
-                (slideInHorizontally(
-                    initialOffsetX = { -it / 4 },
-                    animationSpec = tween(300, easing = FastOutSlowInEasing)
-                ) + fadeIn(animationSpec = tween(180))) togetherWith
-                    (slideOutHorizontally(
-                        targetOffsetX = { it },
-                        animationSpec = tween(300, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(140)))
-            } else {
-                (slideInHorizontally(
-                    initialOffsetX = { it },
-                    animationSpec = tween(320, easing = FastOutSlowInEasing)
-                ) + fadeIn(animationSpec = tween(180))) togetherWith
-                    (slideOutHorizontally(
-                        targetOffsetX = { -it / 4 },
-                        animationSpec = tween(320, easing = FastOutSlowInEasing)
-                    ) + fadeOut(animationSpec = tween(140)))
+                HorizontalPager(
+                    state = pager,
+                    modifier = Modifier.weight(1f),
+                    key = { it },
+                ) { page ->
+                    when (page) {
+                        0 -> HomePage()
+                        1 -> ChargePage()
+                        else -> MonitorPage()
+                    }
+                }
             }
-        },
-        label = "settings_page_transition"
-    ) { destination ->
-        when (destination) {
-            Screen.Home -> HomeScreen(
-                onOpenChargeSpeed = { openScreen(Screen.ChargeSpeed) },
-                onOpenBatteryMonitor = { openScreen(Screen.BatteryMonitor) }
-            )
-            Screen.ChargeSpeed -> ChargeSpeedScreen(onBack = { closeScreen() })
-            Screen.BatteryMonitor -> BatteryMonitorScreen(onBack = { closeScreen() })
+
+            AnimatedVisibility(
+                visible = started && !imeOpen,
+                modifier = Modifier.align(Alignment.BottomCenter),
+                enter = slideInVertically(tween(450, easing = FastOutSlowInEasing)) { it } + fadeIn(tween(300)),
+                exit = slideOutVertically(tween(250, easing = FastOutSlowInEasing)) { it } + fadeOut(tween(200)),
+            ) {
+                NavPill(
+                    labels = listOf("Home", "Charge", "Monitor"),
+                    position = pager.currentPage + pager.currentPageOffsetFraction,
+                    modifier = Modifier.navigationBarsPadding().padding(horizontal = 16.dp).padding(bottom = 16.dp),
+                    onTap = { i -> scope.launch { pager.animateScrollToPage(i) } },
+                    onDrag = { f ->
+                        val size = pager.layoutInfo.pageSize
+                        if (size > 0) pager.dispatchRawDelta(f * size)
+                    },
+                    onRelease = {
+                        val target = (pager.currentPage + pager.currentPageOffsetFraction).roundToInt().coerceIn(0, 2)
+                        scope.launch { pager.animateScrollToPage(target) }
+                    },
+                )
+            }
         }
     }
 }
+
+// ---------- battery state ----------
+
 private data class BatteryState(
     val percent: Int,
     val isCharging: Boolean,
@@ -199,11 +181,11 @@ private fun rememberBatteryState(): BatteryState {
     return state
 }
 
+// ---------- home ----------
+
 @Composable
-fun HomeScreen(
-    onOpenChargeSpeed: () -> Unit,
-    onOpenBatteryMonitor: () -> Unit
-) {
+private fun HomePage() {
+    val p = LocalPalette.current
     val battery = rememberBatteryState()
     val context = LocalContext.current
     var monitorStats by remember { mutableStateOf(BatteryStatsStore.readStats(context)) }
@@ -214,185 +196,66 @@ fun HomeScreen(
             monitorStats = BatteryStatsStore.readStats(context)
             hourlyHistory = BatteryStatsStore.readHourlyHistory(context)
             // BatteryMonitorService only writes fresh data every 10s (REFRESH_INTERVAL_MS),
-            // so polling faster than that just re-reads identical data and triggers
-            // pointless recompositions/allocations. Matching its cadence cuts this
-            // screen's polling (and the graph's redraw) work by 5x with zero data loss.
+            // so polling faster than that just re-reads identical data.
             delay(10_000)
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.systemBars)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp)
-    ) {
-        Spacer(Modifier.height(12.dp))
+    val meter by animateFloatAsState(
+        (battery.percent.coerceIn(0, 100)) / 100f,
+        spring(dampingRatio = 0.6f, stiffness = 150f),
+        label = "meter",
+    )
 
-        Text(
-            "Ampify",
-            style = MaterialTheme.typography.displaySmall,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = appCardColor()
-            )
-        ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Bottom,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        Text(
-                            "${battery.percent}",
-                            style = MaterialTheme.typography.displayLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            "%",
-                            style = MaterialTheme.typography.headlineMedium,
-                            modifier = Modifier.padding(bottom = 8.dp, start = 2.dp)
-                        )
-                    }
-                    if (battery.isCharging) {
-                        Text(
-                            "${kotlin.math.abs(battery.currentNowMa)} mA",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 10.dp)
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(14.dp))
-
-                BatteryLevelBar(percent = battery.percent)
-
-                Spacer(Modifier.height(12.dp))
-
-                Text(
-                    if (battery.isCharging) "Charging" else "Not charging",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+    PageScaffold {
+        SectionCard {
+            DotMeter(meter)
+            Spacer(Modifier.height(14.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Readout("Battery", "${battery.percent}%")
+                Readout(
+                    "Current",
+                    if (battery.isCharging) "${kotlin.math.abs(battery.currentNowMa)} mA" else "--",
+                    alignEnd = true
                 )
+            }
+            Rule()
+            Section("Status") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(9.dp).clip(CircleShape)
+                            .background(if (battery.isCharging) p.accent else p.dotOff)
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(if (battery.isCharging) "Charging" else "Not charging", style = Type.title)
+                }
             }
         }
 
-        Spacer(Modifier.height(8.dp))
-
-        BatteryUsageGraph(
+        BatteryUsageCard(
             history = hourlyHistory,
             screenOnMs = monitorStats.monitorScreenOnMs,
             screenOffMs = monitorStats.monitorScreenOffMs
         )
-
-        Spacer(Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            HomeActionCard(
-                title = "Charging\nControl",
-                modifier = Modifier.weight(1f),
-                onClick = onOpenChargeSpeed
-            )
-            HomeActionCard(
-                title = "Battery\nMonitor",
-                modifier = Modifier.weight(1f),
-                onClick = onOpenBatteryMonitor
-            )
-        }
-
-        Spacer(Modifier.height(8.dp))
-    }
-}
-
-private val HomeCardShape = RoundedCornerShape(28.dp)
-
-@Composable
-private fun HomeActionCard(
-    title: String,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Card(
-        onClick = onClick,
-        modifier = modifier.aspectRatio(1f),
-        shape = HomeCardShape,
-        colors = CardDefaults.cardColors(
-            containerColor = appCardColor()
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(18.dp),
-            verticalArrangement = Arrangement.Bottom
-        ) {
-            Text(
-                title,
-                fontSize = 18.sp,
-                lineHeight = 22.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
     }
 }
 
 @Composable
-private fun BatteryLevelBar(percent: Int) {
-    val fraction = (percent.coerceIn(0, 100)) / 100f
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(28.dp)
-            .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f))
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .fillMaxWidth(fraction)
-                .clip(RoundedCornerShape(50))
-                .background(MaterialTheme.colorScheme.primary)
-        )
-    }
-}
-
-@Composable
-private fun BatteryUsageGraph(
+private fun BatteryUsageCard(
     history: List<Pair<String, Int>>,
     screenOnMs: Long,
     screenOffMs: Long
 ) {
-    val subtitleColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+    val p = LocalPalette.current
 
     if (history.size < 2) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = appCardColor()
-            )
-        ) {
-            Text(
-                "Not enough data yet — check back after the monitor has run a while.",
-                modifier = Modifier.padding(20.dp),
-                fontSize = 13.sp,
-                color = subtitleColor
-            )
+        SectionCard {
+            Section("Battery usage") {
+                Text(
+                    "Not enough data yet. Check back after the monitor has been running for a while.",
+                    color = p.mute
+                )
+            }
         }
         return
     }
@@ -419,242 +282,152 @@ private fun BatteryUsageGraph(
     val yTicks = 4
     val yLabels = (0..yTicks).map { i -> axisTop - (axisRange * i / yTicks) }
 
-    val areaTop = MaroonAccent.copy(alpha = 0.35f)
-    val areaBottom = MaroonAccent.copy(alpha = 0.04f)
-    val lineColor = MaroonAccent
-    val projectionColor = MaterialTheme.colorScheme.tertiary
-    val gridColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.16f)
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
-    val markerRing = MaterialTheme.colorScheme.surface
+    val lineColor = p.accent
+    val areaTop = p.accent.copy(alpha = 0.30f)
+    val areaBottom = p.accent.copy(alpha = 0.02f)
+    val projectionColor = p.mute
+    val gridColor = p.stroke
+    val markerRing = p.card
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = appCardColor()
-        )
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Text(
-                "Battery usage",
-                style = MaterialTheme.typography.labelLarge,
-                color = subtitleColor
-            )
-
-            Spacer(Modifier.height(6.dp))
-
+    SectionCard {
+        Section("Battery usage") {
             Row(verticalAlignment = Alignment.Bottom) {
+                Text("$used%", style = Type.headline)
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    "$used%",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    "  used in ${formatDuration(monitoredMs)}",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = subtitleColor,
-                    modifier = Modifier.padding(bottom = 3.dp)
+                    "used in ${formatDuration(monitoredMs)}",
+                    color = p.mute,
+                    modifier = Modifier.padding(bottom = 5.dp)
                 )
             }
-
-            Spacer(Modifier.height(14.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatChip("Screen on", formatDuration(screenOnMs), Modifier.weight(1f))
                 StatChip("Screen off", formatDuration(screenOffMs), Modifier.weight(1f))
             }
+        }
 
-            Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(20.dp))
 
-            Row(modifier = Modifier.fillMaxWidth()) {
-                Canvas(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(180.dp)
-                ) {
-                    val w = size.width
-                    val h = size.height
-
-                    fun yFor(pct: Int): Float {
-                        val clamped = pct.coerceIn(axisBottom, axisTop)
-                        return h - ((clamped - axisBottom).toFloat() / axisRange) * h
-                    }
-
-                    for (i in 0..yTicks) {
-                        val y = h * i / yTicks
-                        drawLine(
-                            color = gridColor,
-                            start = Offset(0f, y),
-                            end = Offset(w, y),
-                            strokeWidth = 2f,
-                            pathEffect = if (i == 0 || i == yTicks) null
-                            else PathEffect.dashPathEffect(floatArrayOf(8f, 10f), 0f)
-                        )
-                    }
-
-                    val historyWidth = w * 0.6f
-                    val stepX = historyWidth / (history.size - 1)
-
-                    val xTicks = 3
-                    for (i in 0..xTicks) {
-                        val x = w * i / xTicks
-                        drawLine(
-                            color = gridColor,
-                            start = Offset(x, 0f),
-                            end = Offset(x, h),
-                            strokeWidth = 2f,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 12f), 0f)
-                        )
-                    }
-
-                    val curve = Path()
-                    curve.moveTo(0f, yFor(startPct))
-                    history.forEachIndexed { index, (_, pct) ->
-                        curve.lineTo(index * stepX, yFor(pct))
-                    }
-
-                    val area = Path()
-                    area.addPath(curve)
-                    area.lineTo(historyWidth, h)
-                    area.lineTo(0f, h)
-                    area.close()
-                    drawPath(
-                        area,
-                        brush = Brush.verticalGradient(listOf(areaTop, areaBottom))
-                    )
-                    drawPath(
-                        curve,
-                        color = lineColor,
-                        style = Stroke(width = 6f, cap = StrokeCap.Round)
-                    )
-
-                    val markerY = yFor(endPct)
-                    drawCircle(color = markerRing, radius = 12f, center = Offset(historyWidth, markerY))
-                    drawCircle(color = lineColor, radius = 8f, center = Offset(historyWidth, markerY))
-
-                    val perHour = used.toFloat() / (history.size - 1).toFloat()
-                    val hoursLeft = if (perHour > 0.1f) (endPct - axisBottom) / perHour else 24f
-                    val projX = (historyWidth + hoursLeft * stepX).coerceAtMost(w)
-                    val projFraction =
-                        if (hoursLeft > 0f && projX > historyWidth) (projX - historyWidth) / (hoursLeft * stepX) else 1f
-                    val projY = markerY + (h - markerY) * projFraction.coerceIn(0f, 1f)
-                    drawLine(
-                        color = projectionColor,
-                        start = Offset(historyWidth, markerY),
-                        end = Offset(projX, projY),
-                        strokeWidth = 7f,
-                        cap = StrokeCap.Round,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(2f, 20f), 0f)
-                    )
-                }
-
-                Spacer(Modifier.width(8.dp))
-
-                Column(
-                    modifier = Modifier.height(180.dp),
-                    verticalArrangement = Arrangement.SpaceBetween,
-                    horizontalAlignment = Alignment.Start
-                ) {
-                    yLabels.forEach { value ->
-                        Text("$value%", fontSize = 11.sp, color = labelColor)
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            val xStamps = buildList {
-                add(history.first().first)
-                if (history.size >= 4) add(history[history.size / 3].first)
-                if (history.size >= 3) add(history[(history.size * 2) / 3].first)
-                add(history.last().first)
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(end = 40.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Canvas(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(180.dp)
             ) {
-                xStamps.forEach { stamp ->
-                    Text(stamp, fontSize = 11.sp, color = labelColor)
+                val w = size.width
+                val h = size.height
+
+                fun yFor(pct: Int): Float {
+                    val clamped = pct.coerceIn(axisBottom, axisTop)
+                    return h - ((clamped - axisBottom).toFloat() / axisRange) * h
+                }
+
+                for (i in 0..yTicks) {
+                    val y = h * i / yTicks
+                    drawLine(
+                        color = gridColor,
+                        start = Offset(0f, y),
+                        end = Offset(w, y),
+                        strokeWidth = 2f,
+                        pathEffect = if (i == 0 || i == yTicks) null
+                        else PathEffect.dashPathEffect(floatArrayOf(8f, 10f), 0f)
+                    )
+                }
+
+                val historyWidth = w * 0.6f
+                val stepX = historyWidth / (history.size - 1)
+
+                val xTicks = 3
+                for (i in 0..xTicks) {
+                    val x = w * i / xTicks
+                    drawLine(
+                        color = gridColor,
+                        start = Offset(x, 0f),
+                        end = Offset(x, h),
+                        strokeWidth = 2f,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 12f), 0f)
+                    )
+                }
+
+                val curve = Path()
+                curve.moveTo(0f, yFor(startPct))
+                history.forEachIndexed { index, (_, pct) ->
+                    curve.lineTo(index * stepX, yFor(pct))
+                }
+
+                val area = Path()
+                area.addPath(curve)
+                area.lineTo(historyWidth, h)
+                area.lineTo(0f, h)
+                area.close()
+                drawPath(
+                    area,
+                    brush = Brush.verticalGradient(listOf(areaTop, areaBottom))
+                )
+                drawPath(
+                    curve,
+                    color = lineColor,
+                    style = Stroke(width = 6f, cap = StrokeCap.Round)
+                )
+
+                val markerY = yFor(endPct)
+                drawCircle(color = markerRing, radius = 12f, center = Offset(historyWidth, markerY))
+                drawCircle(color = lineColor, radius = 8f, center = Offset(historyWidth, markerY))
+
+                val perHour = used.toFloat() / (history.size - 1).toFloat()
+                val hoursLeft = if (perHour > 0.1f) (endPct - axisBottom) / perHour else 24f
+                val projX = (historyWidth + hoursLeft * stepX).coerceAtMost(w)
+                val projFraction =
+                    if (hoursLeft > 0f && projX > historyWidth) (projX - historyWidth) / (hoursLeft * stepX) else 1f
+                val projY = markerY + (h - markerY) * projFraction.coerceIn(0f, 1f)
+                drawLine(
+                    color = projectionColor,
+                    start = Offset(historyWidth, markerY),
+                    end = Offset(projX, projY),
+                    strokeWidth = 7f,
+                    cap = StrokeCap.Round,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(2f, 20f), 0f)
+                )
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            Column(
+                modifier = Modifier.height(180.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+                horizontalAlignment = Alignment.Start
+            ) {
+                yLabels.forEach { value ->
+                    Text("$value%", color = p.mute, style = Type.tiny)
                 }
             }
         }
-    }
-}
-@Composable
-private fun StatChip(label: String, value: String, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
-    ) {
-        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Text(
-                label,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                value,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+
+        Spacer(Modifier.height(8.dp))
+
+        val xStamps = buildList {
+            add(history.first().first)
+            if (history.size >= 4) add(history[history.size / 3].first)
+            if (history.size >= 3) add(history[(history.size * 2) / 3].first)
+            add(history.last().first)
         }
-    }
-}
-
-@Composable
-private fun BackButton(onBack: () -> Unit) {
-    val circleColor = MaterialTheme.colorScheme.primaryContainer
-    val arrowColor = MaterialTheme.colorScheme.onPrimaryContainer
-    Surface(
-        onClick = onBack,
-        modifier = Modifier.size(40.dp),
-        shape = CircleShape,
-        color = circleColor,
-        contentColor = arrowColor
-    ) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(end = 40.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Canvas(modifier = Modifier.size(20.dp)) {
-                val strokeWidth = 2.5.dp.toPx()
-                val centerY = size.height * 0.5f
-                val tip = size.width * 0.12f
-                val shaftEnd = size.width * 0.88f
-                val headLength = size.width * 0.42f
-                val headSpread = size.height * 0.32f
-
-                drawLine(
-                    color = arrowColor,
-                    start = Offset(tip, centerY),
-                    end = Offset(shaftEnd, centerY),
-                    strokeWidth = strokeWidth,
-                    cap = StrokeCap.Round
-                )
-                drawLine(
-                    color = arrowColor,
-                    start = Offset(tip, centerY),
-                    end = Offset(tip + headLength, centerY - headSpread),
-                    strokeWidth = strokeWidth,
-                    cap = StrokeCap.Round
-                )
-                drawLine(
-                    color = arrowColor,
-                    start = Offset(tip, centerY),
-                    end = Offset(tip + headLength, centerY + headSpread),
-                    strokeWidth = strokeWidth,
-                    cap = StrokeCap.Round
-                )
+            xStamps.forEach { stamp ->
+                Text(stamp, color = p.mute, style = Type.tiny)
             }
         }
     }
 }
 
+// ---------- charge control ----------
+
 @Composable
-fun ChargeSpeedScreen(onBack: () -> Unit) {
+private fun ChargePage() {
+    val p = LocalPalette.current
     var rootGranted by remember { mutableStateOf<Boolean?>(null) }
     var nodesPresent by remember { mutableStateOf(true) }
     var restrictEnabled by remember { mutableStateOf(false) }
@@ -678,126 +451,91 @@ fun ChargeSpeedScreen(onBack: () -> Unit) {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.systemBars)
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        BackButton(onBack)
-        Spacer(Modifier.height(20.dp))
+    val ready = rootGranted == true && nodesPresent
+    val validMa = currentInputMa.toIntOrNull()?.let { it > 0 } == true
 
-        Text(
-            "Charge Control",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold
-        )
-
-        when {
-            rootGranted == null -> {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text("Checking root access…")
-                }
-            }
-            rootGranted == false -> {
-                Card(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-                ) {
-                    Text(
-                        "Root access was not granted. This app requires a rooted device with Magisk (or similar) and root must be allowed for this app.",
-                        modifier = Modifier.padding(16.dp)
-                    )
-                }
-            }
-            !nodesPresent -> {
-                Card(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-                ) {
-                    Text(
-                        "This device's kernel doesn't expose /sys/class/qcom-battery/restrict_chg or restrict_cur.",
-                        modifier = Modifier.padding(16.dp)
-                    )
-                }
-            }
-            else -> {
-                ElevatedCard(
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.elevatedCardColors(containerColor = appCardColor())
-                ) {
-                    Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Enable services", style = MaterialTheme.typography.titleMedium)
-                            Switch(
-                                checked = restrictEnabled,
-                                onCheckedChange = { checked ->
-                                    val ok = RootUtils.setRestrictChg(checked)
-                                    if (ok) {
-                                        restrictEnabled = checked
-                                        status = "Services ${if (checked) "enabled" else "disabled"}"
-                                        isError = false
-                                    } else {
-                                        status = "Failed to update services"
-                                        isError = true
-                                    }
-                                },
-                                colors = maroonSwitchColors()
-                            )
+    PageScaffold {
+        SectionCard {
+            when {
+                rootGranted == null -> {
+                    Section("Root") {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            WorkingDots()
+                            Spacer(Modifier.width(12.dp))
+                            Text("Checking root access", color = p.mute)
                         }
+                    }
+                }
+                rootGranted == false -> {
+                    Section("Root") {
+                        Text(
+                            "Root access was not granted. This app needs a rooted device with Magisk (or similar), and root must be allowed for Ampify.",
+                            color = p.accent
+                        )
+                    }
+                }
+                !nodesPresent -> {
+                    Section("Kernel") {
+                        Text(
+                            "This device's kernel doesn't expose /sys/class/qcom-battery/restrict_chg or restrict_cur.",
+                            color = p.accent
+                        )
+                    }
+                }
+                else -> {
+                    SwitchRow("Enable services", restrictEnabled) { checked ->
+                        val ok = RootUtils.setRestrictChg(checked)
+                        if (ok) {
+                            restrictEnabled = checked
+                            status = "Services ${if (checked) "enabled" else "disabled"}"
+                            isError = false
+                        } else {
+                            status = "Failed to update services"
+                            isError = true
+                        }
+                    }
 
-                        HorizontalDivider()
+                    Rule()
 
-                        Text("Charge current limit", style = MaterialTheme.typography.titleMedium)
-                        OutlinedTextField(
+                    Section("Charge current limit") {
+                        Field(
                             value = currentInputMa,
                             onValueChange = { input -> currentInputMa = input.filter { it.isDigit() } },
-                            label = { Text("In mA") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                            placeholder = "0",
+                            keyboard = KeyboardType.Number,
+                            suffix = "mA"
                         )
+                    }
 
-                        Button(
-                            onClick = {
-                                val ma = currentInputMa.toIntOrNull()
-                                if (ma == null || ma <= 0) {
-                                    status = "Enter a valid positive number"
-                                    isError = true
-                                } else {
-                                    val microAmps = ma * 1000
-                                    val ok = RootUtils.setRestrictCur(microAmps)
-                                    status = if (ok) "Charge current set to ${ma}mA" else "Failed to set charge current"
-                                    isError = !ok
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Apply current limit")
-                        }
+                    Reveal(status != null) {
+                        Rule()
+                        Text(status.orEmpty(), color = if (isError) p.accent else p.text)
                     }
                 }
             }
         }
 
-        status?.let {
-            Text(
-                it,
-                color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodyMedium
-            )
+        if (ready) {
+            ActionPill("Apply limit", enabled = validMa) {
+                val ma = currentInputMa.toIntOrNull()
+                if (ma == null || ma <= 0) {
+                    status = "Enter a valid positive number"
+                    isError = true
+                } else {
+                    val microAmps = ma * 1000
+                    val ok = RootUtils.setRestrictCur(microAmps)
+                    status = if (ok) "Charge current set to ${ma}mA" else "Failed to set charge current"
+                    isError = !ok
+                }
+            }
         }
     }
 }
 
+// ---------- battery monitor ----------
+
 @Composable
-fun BatteryMonitorScreen(onBack: () -> Unit) {
+private fun MonitorPage() {
     val context = LocalContext.current
     var monitorEnabled by remember { mutableStateOf(BatteryMonitorService.isRunning) }
     var stats by remember { mutableStateOf(BatteryStatsStore.readStats(context)) }
@@ -838,88 +576,27 @@ fun BatteryMonitorScreen(onBack: () -> Unit) {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.systemBars)
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        BackButton(onBack)
-        Spacer(Modifier.height(20.dp)) 
-        Text(
-            "Battery Monitor",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold
-        )
+    PageScaffold {
+        SectionCard {
+            SwitchRow("Monitor service", monitorEnabled) { toggleMonitor(it) }
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(OuterCardCorner),
-            colors = CardDefaults.cardColors(containerColor = appCardColor())
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    "Monitor service",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(12.dp))
-                Switch(
-                    checked = monitorEnabled,
-                    onCheckedChange = { toggleMonitor(it) },
-                    colors = maroonSwitchColors()
-                )
+            Rule()
+
+            Section("Current session") {
+                Column {
+                    ValueRow("Battery", "${stats.percent}%")
+                    HairLine()
+                    ValueRow("Active drain", "${"%.1f".format(stats.activeDrainPerHr)}%/hr")
+                    HairLine()
+                    ValueRow("Idle drain", "${"%.1f".format(stats.idleDrainPerHr)}%/hr")
+                    HairLine()
+                    ValueRow("Deep sleep", formatDuration(stats.deepSleepMs))
+                    HairLine()
+                    ValueRow("Awake", formatDuration(stats.awakeMs))
+                }
             }
         }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(OuterCardCorner),
-            colors = CardDefaults.cardColors(containerColor = appCardColor())
-        ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Text(
-                    "Current session",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(12.dp))
-
-                StatRow("Battery", "${stats.percent}%")
-                StatRow("Active drain", "${"%.1f".format(stats.activeDrainPerHr)}%/hr")
-                StatRow("Idle drain", "${"%.1f".format(stats.idleDrainPerHr)}%/hr")
-                StatRow("Deep sleep", formatDuration(stats.deepSleepMs))
-                StatRow("Awake", formatDuration(stats.awakeMs))
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
     }
-}
-
-@Composable
-private fun StatRow(label: String, value: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(label, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
-        Text(value, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f))
 }
 
 private fun formatDuration(ms: Long): String {
