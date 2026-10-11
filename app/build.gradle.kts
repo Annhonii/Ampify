@@ -28,9 +28,24 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    // Stable signing key for CI releases (set from repo secrets by the workflow).
+    // Without it, the debug key is used so the APK still installs.
+    val ciKeystore: String? = System.getenv("KEYSTORE_FILE")
+    signingConfigs {
+        if (ciKeystore != null) {
+            create("ci") {
+                storeFile = file(ciKeystore)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("ci") ?: signingConfigs.getByName("debug")
         }
     }
 
