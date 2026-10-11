@@ -1,9 +1,6 @@
 package com.example.batteryrestrict
 
 import android.content.Context
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Locale
 
 data class BatteryStatsSnapshot(
     val percent: Int,
@@ -26,6 +23,14 @@ data class SessionAccumulators(
     val sessionStartElapsedMs: Long?,
     val sessionStartUptimeMs: Long?,
     val lastChargingState: Boolean?
+)
+
+/** One reading of the battery: when, how full, plugged in or not, screen on or off. */
+data class BatterySample(
+    val timeMs: Long,
+    val percent: Int,
+    val charging: Boolean,
+    val screenOn: Boolean
 )
 
 /**
@@ -57,8 +62,12 @@ object BatteryStatsStore {
     private const val KEY_ACC_SESSION_START_UPTIME = "acc_session_start_uptime"
     private const val KEY_ACC_LAST_CHARGING = "acc_last_charging"
 
-    // Hourly "% remaining" bar history (rolling last 24 hours), like the reference battery graph.
-    private const val KEY_HOURLY_HISTORY = "hourly_history" // "hourKey|label|pct,hourKey|label|pct,..."
+    // Time-stamped battery log, "timeMs,percent,flags;..." (flags: 1 = charging, 2 = screen on).
+    // The graph is drawn from this log, so it stays correct even when nothing was recorded for a while.
+    private const val KEY_SAMPLES = "samples_v2"
+    private const val SAMPLE_KEEP_MS = 3L * 24 * 3_600_000
+    private const val SAMPLE_REPEAT_MS = 5L * 60_000
+    private val sampleLock = Any()
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -151,56 +160,63 @@ object BatteryStatsStore {
             putLong(KEY_ACC_SESSION_START_UPTIME, nowUptimeMs)
             putBoolean(KEY_ACC_LAST_CHARGING, true)
 
-            // New charge cycle must not inherit old graph points.
-            remove(KEY_HOURLY_HISTORY)
             apply()
         }
     }
 
     /**
-     * Records/updates the current hour's "% remaining" bar. The in-progress hour's bar is
-     * overwritten on every call (so it updates live); a new bar starts once the clock hour
-     * changes. Keeps a rolling window of the last 24 bars.
+     * Appends a reading to the log. Skips it only if nothing changed (same level, same plug and
+     * screen state) within the last few minutes. Keeps the last 3 days.
      */
-    fun recordHourlySample(context: Context, percent: Int) {
-        val cal = Calendar.getInstance()
-        val hourKey = SimpleDateFormat("yyyyMMddHH", Locale.US).format(cal.time)
-        val displayLabel = SimpleDateFormat("h a", Locale.US).format(cal.time).lowercase(Locale.US)
-
-        val p = prefs(context)
-        val existing = p.getString(KEY_HOURLY_HISTORY, "") ?: ""
-        val entries = if (existing.isBlank()) mutableListOf() else existing.split(",").toMutableList()
-
-        if (entries.isNotEmpty() && entries.last().startsWith("$hourKey|")) {
-            entries[entries.size - 1] = "$hourKey|$displayLabel|$percent"
-        } else {
-            entries.add("$hourKey|$displayLabel|$percent")
+    fun recordSample(
+        context: Context,
+        percent: Int,
+        charging: Boolean,
+        screenOn: Boolean,
+        nowMs: Long = System.currentTimeMillis()
+    ) {
+        synchronized(sampleLock) {
+            val p = prefs(context)
+            val list = parseSamples(p.getString(KEY_SAMPLES, "") ?: "").toMutableList()
+            val last = list.lastOrNull()
+            if (last != null) {
+                if (nowMs < last.timeMs) return // clock moved back; ignore
+                if (last.percent == percent && last.charging == charging &&
+                    last.screenOn == screenOn && nowMs - last.timeMs < SAMPLE_REPEAT_MS
+                ) return
+            }
+            list.add(BatterySample(nowMs, percent, charging, screenOn))
+            val cutoff = nowMs - SAMPLE_KEEP_MS
+            val kept = list.filter { it.timeMs >= cutoff }
+            p.edit().putString(KEY_SAMPLES, encodeSamples(kept)).apply()
         }
-        while (entries.size > 24) entries.removeAt(0)
-
-        p.edit().putString(KEY_HOURLY_HISTORY, entries.joinToString(",")).apply()
     }
 
-    /**
-     * Clears just the persisted hourly graph history, without touching the current-session
-     * accumulators/snapshot. Used when the user manually turns the monitor off, so the Home
-     * graph goes back to "not enough data yet" instead of showing stale points.
-     */
-    fun clearHourlyHistory(context: Context) {
-        prefs(context).edit().remove(KEY_HOURLY_HISTORY).apply()
+    /** Readings at or after [sinceMs], oldest first. */
+    fun readSamples(context: Context, sinceMs: Long): List<BatterySample> {
+        val raw = prefs(context).getString(KEY_SAMPLES, "") ?: ""
+        return parseSamples(raw).filter { it.timeMs >= sinceMs }
     }
 
-    /** Returns (displayLabel, percent) oldest -> newest, e.g. ("3 pm", 62). */
-    fun readHourlyHistory(context: Context): List<Pair<String, Int>> {
-        val existing = prefs(context).getString(KEY_HOURLY_HISTORY, "") ?: ""
-        if (existing.isBlank()) return emptyList()
-        return existing.split(",").mapNotNull { entry ->
-            val parts = entry.split("|")
-            if (parts.size >= 3) {
-                val label = parts[1]
-                val pct = parts[2].toIntOrNull()
-                if (pct != null) label to pct else null
-            } else null
+    fun clearSamples(context: Context) {
+        prefs(context).edit().remove(KEY_SAMPLES).apply()
+    }
+
+    private fun encodeSamples(list: List<BatterySample>): String =
+        list.joinToString(";") {
+            val flags = (if (it.charging) 1 else 0) or (if (it.screenOn) 2 else 0)
+            "${it.timeMs},${it.percent},$flags"
         }
+
+    private fun parseSamples(raw: String): List<BatterySample> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split(";").mapNotNull { entry ->
+            val parts = entry.split(",")
+            if (parts.size < 3) return@mapNotNull null
+            val t = parts[0].toLongOrNull() ?: return@mapNotNull null
+            val pct = parts[1].toIntOrNull() ?: return@mapNotNull null
+            val f = parts[2].toIntOrNull() ?: return@mapNotNull null
+            BatterySample(t, pct, (f and 1) != 0, (f and 2) != 0)
+        }.sortedBy { it.timeMs }
     }
 }

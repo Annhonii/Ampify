@@ -437,3 +437,80 @@ fun StatChip(label: String, value: String, modifier: Modifier = Modifier) {
         Text(value, style = Type.title)
     }
 }
+
+// ---------- usage widgets ----------
+
+/** Pill-shaped picker with a thumb that glides to the chosen option. */
+@Composable
+fun Segmented(
+    options: List<String>,
+    selected: Int,
+    modifier: Modifier = Modifier,
+    onSelect: (Int) -> Unit,
+) {
+    val p = LocalPalette.current
+    val density = LocalDensity.current
+    val pos by animateFloatAsState(selected.toFloat(), tween(250, easing = FastOutSlowInEasing), label = "seg")
+    var widthPx by remember { mutableIntStateOf(0) }
+    val n = options.size
+    val padPx = with(density) { 4.dp.toPx() }
+    val segPx = if (widthPx > 0) (widthPx - 2 * padPx) / n else 0f
+    val segDp = with(density) { segPx.toDp() }
+
+    Box(
+        modifier.fillMaxWidth().height(40.dp)
+            .clip(CircleShape)
+            .background(p.field)
+            .onSizeChanged { widthPx = it.width },
+    ) {
+        Box(
+            Modifier.padding(4.dp).fillMaxHeight().width(segDp)
+                .offset { IntOffset((pos * segPx).roundToInt(), 0) }
+                .clip(CircleShape)
+                .background(p.text),
+        )
+        Row(Modifier.fillMaxSize().padding(4.dp)) {
+            options.forEachIndexed { i, label ->
+                val near = (1f - abs(pos - i)).coerceIn(0f, 1f)
+                Box(
+                    Modifier.weight(1f).fillMaxHeight().tap(true, CircleShape) { onSelect(i) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(label, color = lerp(p.text, p.bg, near), style = Type.label, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LegendItem(color: Color, label: String) {
+    val p = LocalPalette.current
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(6.dp))
+        Text(label, color = p.mute, style = Type.small)
+    }
+}
+
+/** A name, a value on the right and a thin bar showing the share against the biggest item. */
+@Composable
+fun UsageRow(name: String, value: String, fraction: Float) {
+    val p = LocalPalette.current
+    Column(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(name, Modifier.weight(1f), style = Type.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.width(12.dp))
+            Text(value, color = p.mute, style = Type.body, maxLines = 1)
+        }
+        Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(p.field)) {
+            Box(
+                Modifier.fillMaxWidth(fraction.coerceIn(0.02f, 1f)).fillMaxHeight()
+                    .clip(CircleShape).background(p.accent),
+            )
+        }
+    }
+}

@@ -34,6 +34,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,7 +49,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.topjohnwu.superuser.Shell
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -188,15 +191,16 @@ private fun HomePage() {
     val p = LocalPalette.current
     val battery = rememberBatteryState()
     val context = LocalContext.current
-    var monitorStats by remember { mutableStateOf(BatteryStatsStore.readStats(context)) }
-    var hourlyHistory by remember { mutableStateOf(BatteryStatsStore.readHourlyHistory(context)) }
+    var samples by remember { mutableStateOf<List<BatterySample>>(emptyList()) }
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    var windowIdx by rememberSaveable { mutableIntStateOf(1) }
 
     LaunchedEffect(Unit) {
+        // Log a reading as soon as the app opens, then keep the chart fresh.
+        BatterySampler.sample(context)
         while (true) {
-            monitorStats = BatteryStatsStore.readStats(context)
-            hourlyHistory = BatteryStatsStore.readHourlyHistory(context)
-            // BatteryMonitorService only writes fresh data every 10s (REFRESH_INTERVAL_MS),
-            // so polling faster than that just re-reads identical data.
+            samples = BatteryStatsStore.readSamples(context, System.currentTimeMillis() - 26 * DrainMath.HOUR_MS)
+            nowMs = System.currentTimeMillis()
             delay(10_000)
         }
     }
@@ -206,6 +210,13 @@ private fun HomePage() {
         spring(dampingRatio = 0.6f, stiffness = 150f),
         label = "meter",
     )
+
+    val windowHours = listOf(6, 12, 24)[windowIdx]
+    // Add "right now" as the last point so the line always reaches the present.
+    val lastT = samples.lastOrNull()?.timeMs ?: 0L
+    val all = if (battery.percent > 0 && nowMs >= lastT)
+        samples + BatterySample(nowMs, battery.percent, battery.isCharging, true)
+    else samples
 
     PageScaffold {
         SectionCard {
@@ -232,192 +243,74 @@ private fun HomePage() {
             }
         }
 
-        BatteryUsageCard(
-            history = hourlyHistory,
-            screenOnMs = monitorStats.monitorScreenOnMs,
-            screenOffMs = monitorStats.monitorScreenOffMs
-        )
+        BatteryUsageCard(all, windowHours, nowMs, windowIdx) { windowIdx = it }
     }
 }
 
 @Composable
 private fun BatteryUsageCard(
-    history: List<Pair<String, Int>>,
-    screenOnMs: Long,
-    screenOffMs: Long
+    all: List<BatterySample>,
+    windowHours: Int,
+    nowMs: Long,
+    selected: Int,
+    onSelect: (Int) -> Unit
 ) {
     val p = LocalPalette.current
-
-    if (history.size < 2) {
-        SectionCard {
-            Section("Battery usage") {
-                Text(
-                    "Not enough data yet. Check back after the monitor has been running for a while.",
-                    color = p.mute
-                )
-            }
-        }
-        return
-    }
-
-    val percents = history.map { it.second }
-    val startPct = percents.first()
-    val endPct = percents.last()
-    val used = (startPct - endPct).coerceAtLeast(0)
-    val monitoredMs = screenOnMs + screenOffMs
-
-    val dataMax = percents.max()
-    val dataMin = percents.min()
-    val rawTop = (dataMax + 2).coerceAtMost(100)
-    val rawBottom = (dataMin - 2).coerceAtLeast(0)
-    var axisTop = ((rawTop + 4) / 5) * 5
-    var axisBottom = (rawBottom / 5) * 5
-    if (axisTop > 100) axisTop = 100
-    if (axisTop - axisBottom < 5) {
-        axisBottom = (axisTop - 5).coerceAtLeast(0)
-        if (axisTop - axisBottom < 5) axisTop = (axisBottom + 5).coerceAtMost(100)
-    }
-    val axisRange = (axisTop - axisBottom).coerceAtLeast(1)
-
-    val yTicks = 4
-    val yLabels = (0..yTicks).map { i -> axisTop - (axisRange * i / yTicks) }
-
-    val lineColor = p.accent
-    val areaTop = p.accent.copy(alpha = 0.30f)
-    val areaBottom = p.accent.copy(alpha = 0.02f)
-    val projectionColor = p.mute
-    val gridColor = p.stroke
-    val markerRing = p.card
+    val startMs = nowMs - windowHours * DrainMath.HOUR_MS
+    val enough = all.count { it.timeMs in startMs..nowMs } >= 2
 
     SectionCard {
         Section("Battery usage") {
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("$used%", style = Type.headline)
-                Spacer(Modifier.width(8.dp))
+            Segmented(listOf("6 h", "12 h", "24 h"), selected, onSelect = onSelect)
+
+            if (!enough) {
                 Text(
-                    "used in ${formatDuration(monitoredMs)}",
-                    color = p.mute,
-                    modifier = Modifier.padding(bottom = 5.dp)
+                    "Not enough data yet. Ampify logs the battery level in the background while the monitor is on.",
+                    color = p.mute
                 )
-            }
+            } else {
+                val summary = DrainMath.summarize(all, startMs, nowMs)
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatChip("Screen on", formatDuration(screenOnMs), Modifier.weight(1f))
-                StatChip("Screen off", formatDuration(screenOffMs), Modifier.weight(1f))
-            }
-        }
-
-        Spacer(Modifier.height(20.dp))
-
-        Row(modifier = Modifier.fillMaxWidth()) {
-            Canvas(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(180.dp)
-            ) {
-                val w = size.width
-                val h = size.height
-
-                fun yFor(pct: Int): Float {
-                    val clamped = pct.coerceIn(axisBottom, axisTop)
-                    return h - ((clamped - axisBottom).toFloat() / axisRange) * h
-                }
-
-                for (i in 0..yTicks) {
-                    val y = h * i / yTicks
-                    drawLine(
-                        color = gridColor,
-                        start = Offset(0f, y),
-                        end = Offset(w, y),
-                        strokeWidth = 2f,
-                        pathEffect = if (i == 0 || i == yTicks) null
-                        else PathEffect.dashPathEffect(floatArrayOf(8f, 10f), 0f)
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text("${summary.usedPercent.roundToInt()}%", style = Type.headline)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "used in the last $windowHours h",
+                        color = p.mute,
+                        modifier = Modifier.padding(bottom = 5.dp)
                     )
                 }
 
-                val historyWidth = w * 0.6f
-                val stepX = historyWidth / (history.size - 1)
-
-                val xTicks = 3
-                for (i in 0..xTicks) {
-                    val x = w * i / xTicks
-                    drawLine(
-                        color = gridColor,
-                        start = Offset(x, 0f),
-                        end = Offset(x, h),
-                        strokeWidth = 2f,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 12f), 0f)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    StatChip(
+                        "Screen on",
+                        "${summary.screenOnDrop.roundToInt()}% in ${formatDuration(summary.screenOnMs)}",
+                        Modifier.weight(1f)
+                    )
+                    StatChip(
+                        "Screen off",
+                        "${summary.screenOffDrop.roundToInt()}% in ${formatDuration(summary.screenOffMs)}",
+                        Modifier.weight(1f)
                     )
                 }
 
-                val curve = Path()
-                curve.moveTo(0f, yFor(startPct))
-                history.forEachIndexed { index, (_, pct) ->
-                    curve.lineTo(index * stepX, yFor(pct))
+                BatteryGraph(all, windowHours, nowMs)
+
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    LegendItem(p.accent, "On battery")
+                    LegendItem(p.mute, "Charging or no data")
                 }
-
-                val area = Path()
-                area.addPath(curve)
-                area.lineTo(historyWidth, h)
-                area.lineTo(0f, h)
-                area.close()
-                drawPath(
-                    area,
-                    brush = Brush.verticalGradient(listOf(areaTop, areaBottom))
-                )
-                drawPath(
-                    curve,
-                    color = lineColor,
-                    style = Stroke(width = 6f, cap = StrokeCap.Round)
-                )
-
-                val markerY = yFor(endPct)
-                drawCircle(color = markerRing, radius = 12f, center = Offset(historyWidth, markerY))
-                drawCircle(color = lineColor, radius = 8f, center = Offset(historyWidth, markerY))
-
-                val perHour = used.toFloat() / (history.size - 1).toFloat()
-                val hoursLeft = if (perHour > 0.1f) (endPct - axisBottom) / perHour else 24f
-                val projX = (historyWidth + hoursLeft * stepX).coerceAtMost(w)
-                val projFraction =
-                    if (hoursLeft > 0f && projX > historyWidth) (projX - historyWidth) / (hoursLeft * stepX) else 1f
-                val projY = markerY + (h - markerY) * projFraction.coerceIn(0f, 1f)
-                drawLine(
-                    color = projectionColor,
-                    start = Offset(historyWidth, markerY),
-                    end = Offset(projX, projY),
-                    strokeWidth = 7f,
-                    cap = StrokeCap.Round,
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(2f, 20f), 0f)
-                )
-            }
-
-            Spacer(Modifier.width(8.dp))
-
-            Column(
-                modifier = Modifier.height(180.dp),
-                verticalArrangement = Arrangement.SpaceBetween,
-                horizontalAlignment = Alignment.Start
-            ) {
-                yLabels.forEach { value ->
-                    Text("$value%", color = p.mute, style = Type.tiny)
-                }
+                Text("The strip under the chart is red while the screen was on.", color = p.mute, style = Type.small)
             }
         }
 
-        Spacer(Modifier.height(8.dp))
-
-        val xStamps = buildList {
-            add(history.first().first)
-            if (history.size >= 4) add(history[history.size / 3].first)
-            if (history.size >= 3) add(history[(history.size * 2) / 3].first)
-            add(history.last().first)
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(end = 40.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            xStamps.forEach { stamp ->
-                Text(stamp, color = p.mute, style = Type.tiny)
+        if (enough) {
+            Rule()
+            val firstHour = DrainMath.hourStart(nowMs) - (windowHours - 1) * DrainMath.HOUR_MS
+            val bars = DrainMath.hourly(all, firstHour, windowHours)
+            Section("Drain per hour") {
+                HourlyDrain(bars)
+                Text("Percent lost in each clock hour. The busiest hour is red.", color = p.mute, style = Type.small)
             }
         }
     }
@@ -564,7 +457,6 @@ private fun MonitorPage() {
             }
         } else {
             BatteryMonitorService.stop(context)
-            BatteryStatsStore.clearHourlyHistory(context)
             monitorEnabled = false
         }
     }
@@ -575,6 +467,12 @@ private fun MonitorPage() {
             delay(10_000)
         }
     }
+
+    var report by remember { mutableStateOf<PowerReport?>(null) }
+    var scanning by remember { mutableStateOf(false) }
+    var scanFailed by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val p = LocalPalette.current
 
     PageScaffold {
         SectionCard {
@@ -596,8 +494,78 @@ private fun MonitorPage() {
                 }
             }
         }
+
+        SectionCard {
+            Section("Power use") {
+                when {
+                    scanning -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        WorkingDots()
+                        Spacer(Modifier.width(12.dp))
+                        Text("Reading battery stats", color = p.mute)
+                    }
+                    scanFailed -> Text(
+                        "Couldn't read battery stats. Allow root for Ampify and try again.",
+                        color = p.accent
+                    )
+                    report == null -> Text(
+                        "Scan with root to see which apps and which parts of the phone used the most battery since the last full charge.",
+                        color = p.mute
+                    )
+                    else -> Text(
+                        "Since the last full charge" +
+                            (report?.capacityMah?.let { ". Battery capacity ${it.roundToInt()} mAh" } ?: "") + ".",
+                        color = p.mute
+                    )
+                }
+            }
+
+            report?.let { r ->
+                if (r.apps.isNotEmpty()) {
+                    Rule()
+                    Section("Apps") {
+                        val top = r.apps.take(10)
+                        val max = top.first().mah
+                        Column {
+                            top.forEach { UsageRow(it.name, formatMah(it.mah), (it.mah / max).toFloat()) }
+                        }
+                        if (r.appsIncludeShared) {
+                            Text(
+                                "App figures include their share of the screen and radios.",
+                                color = p.mute, style = Type.small
+                            )
+                        }
+                    }
+                }
+                if (r.components.isNotEmpty()) {
+                    Rule()
+                    Section("Phone components") {
+                        val max = r.components.first().mah
+                        Column {
+                            r.components.take(12).forEach {
+                                UsageRow(it.name, formatMah(it.mah), (it.mah / max).toFloat())
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        ActionPill(if (report == null) "Scan power use" else "Scan again", enabled = !scanning) {
+            scope.launch {
+                scanning = true
+                scanFailed = false
+                val result = withContext(Dispatchers.IO) {
+                    runCatching { if (RootUtils.hasRoot()) PowerStats.load(context) else null }.getOrNull()
+                }
+                if (result == null) scanFailed = true else report = result
+                scanning = false
+            }
+        }
     }
 }
+
+private fun formatMah(v: Double): String =
+    if (v >= 100) "${v.roundToInt()} mAh" else "${"%.1f".format(v)} mAh"
 
 private fun formatDuration(ms: Long): String {
     val totalSeconds = ms / 1000

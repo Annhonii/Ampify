@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import kotlin.math.abs
@@ -40,8 +41,16 @@ class BatteryMonitorService : Service() {
         }
 
         fun stop(context: Context) {
+            BatterySampler.cancelHeartbeat(context)
             val intent = Intent(context, BatteryMonitorService::class.java)
             context.stopService(intent)
+        }
+
+        private var instance: BatteryMonitorService? = null
+
+        /** Called by the background heartbeat so stats also advance during deep sleep. */
+        fun refreshNow() {
+            instance?.updateStatsAndNotification()
         }
     }
 
@@ -106,6 +115,9 @@ class BatteryMonitorService : Service() {
     }
 
     private fun handleScreenChanged(isOn: Boolean) {
+        // Settle everything up to this moment under the OLD screen state first. Otherwise the
+        // percent lost while the screen was off is counted as screen-on drain.
+        updateStatsAndNotification()
         val now = SystemClock.elapsedRealtime()
         val delta = max(0L, now - lastScreenSwitchElapsedMs)
         // Do not include time spent charging. The charge/unplug transition
@@ -208,9 +220,7 @@ class BatteryMonitorService : Service() {
         )
 
         BatteryStatsStore.writeStats(this, snapshot)
-        if (!b.isCharging) {
-            BatteryStatsStore.recordHourlySample(this, b.percent)
-        }
+        BatteryStatsStore.recordSample(this, b.percent, b.isCharging, screenIsOn)
 
         val notif = buildNotification(snapshot)
         notificationManager.notify(NOTIFICATION_ID, notif)
@@ -309,7 +319,9 @@ class BatteryMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         isRunning = true
+        instance = this
         createNotificationChannel()
+        screenIsOn = (getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
 
         val now = SystemClock.elapsedRealtime()
         val nowUptime = SystemClock.uptimeMillis()
@@ -348,13 +360,18 @@ class BatteryMonitorService : Service() {
         )
         startForeground(NOTIFICATION_ID, buildNotification(initialStats))
 
-        // Keep the notification + graph + drain-rate math fresh every 10s even with no events.
+        // Keep the notification + graph + drain-rate math fresh every 10s while awake...
         refreshHandler.postDelayed(refreshRunnable, REFRESH_INTERVAL_MS)
+        // ...and every ~10 min even in deep sleep, when the handler above does not run.
+        BatterySampler.scheduleHeartbeat(this)
+        BatterySampler.sample(this)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        instance = null
+        BatterySampler.cancelHeartbeat(this)
         refreshHandler.removeCallbacks(refreshRunnable)
         try {
             unregisterReceiver(screenReceiver)
