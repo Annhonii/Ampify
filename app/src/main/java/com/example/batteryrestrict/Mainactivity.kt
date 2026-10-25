@@ -191,18 +191,47 @@ private fun HomePage() {
     val p = LocalPalette.current
     val battery = rememberBatteryState()
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    // The graph only runs while the notification monitor is on.
+    val monitorOn = BatteryMonitorService.isRunning
     var samples by remember { mutableStateOf<List<BatterySample>>(emptyList()) }
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var windowIdx by rememberSaveable { mutableIntStateOf(1) }
+    var mode by rememberSaveable { mutableIntStateOf(0) }
+    var report by remember { mutableStateOf<PowerReport?>(null) }
+    var scanning by remember { mutableStateOf(false) }
+    var scanFailed by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        // Log a reading as soon as the app opens, then keep the chart fresh.
+    fun scan() {
+        if (scanning) return
+        scope.launch {
+            scanning = true
+            scanFailed = false
+            val result = withContext(Dispatchers.IO) {
+                runCatching { if (RootUtils.hasRoot()) PowerStats.load(context) else null }.getOrNull()
+            }
+            if (result == null) scanFailed = true else report = result
+            scanning = false
+        }
+    }
+
+    LaunchedEffect(monitorOn) {
+        if (!monitorOn) {
+            samples = emptyList()
+            return@LaunchedEffect
+        }
+        // Log a reading as soon as the monitor is on, then keep the chart fresh.
         BatterySampler.sample(context)
         while (true) {
             samples = BatteryStatsStore.readSamples(context, System.currentTimeMillis() - 26 * DrainMath.HOUR_MS)
             nowMs = System.currentTimeMillis()
             delay(10_000)
         }
+    }
+
+    // Per-app usage is read with root the first time that tab is opened.
+    LaunchedEffect(mode) {
+        if (mode == 1 && report == null) scan()
     }
 
     val meter by animateFloatAsState(
@@ -214,7 +243,7 @@ private fun HomePage() {
     val windowHours = listOf(6, 12, 24)[windowIdx]
     // Add "right now" as the last point so the line always reaches the present.
     val lastT = samples.lastOrNull()?.timeMs ?: 0L
-    val all = if (battery.percent > 0 && nowMs >= lastT)
+    val all = if (monitorOn && battery.percent > 0 && nowMs >= lastT)
         samples + BatterySample(nowMs, battery.percent, battery.isCharging, true)
     else samples
 
@@ -243,64 +272,100 @@ private fun HomePage() {
             }
         }
 
-        BatteryUsageCard(all, windowHours, nowMs, windowIdx) { windowIdx = it }
+        BatteryUsageCard(
+            mode = mode,
+            onMode = { mode = it },
+            monitorOn = monitorOn,
+            all = all,
+            windowHours = windowHours,
+            nowMs = nowMs,
+            selected = windowIdx,
+            onSelect = { windowIdx = it },
+            report = report,
+            scanning = scanning,
+            scanFailed = scanFailed,
+        )
+
+        if (mode == 1) {
+            ActionPill(if (report == null) "Scan app usage" else "Scan again", enabled = !scanning) { scan() }
+        }
     }
 }
 
 @Composable
 private fun BatteryUsageCard(
+    mode: Int,
+    onMode: (Int) -> Unit,
+    monitorOn: Boolean,
     all: List<BatterySample>,
     windowHours: Int,
     nowMs: Long,
     selected: Int,
-    onSelect: (Int) -> Unit
+    onSelect: (Int) -> Unit,
+    report: PowerReport?,
+    scanning: Boolean,
+    scanFailed: Boolean,
 ) {
     val p = LocalPalette.current
     val startMs = nowMs - windowHours * DrainMath.HOUR_MS
-    val enough = all.count { it.timeMs in startMs..nowMs } >= 2
+    val enough = monitorOn && all.count { it.timeMs in startMs..nowMs } >= 2
 
     SectionCard {
-        Section("Battery usage") {
-            Segmented(listOf("6 h", "12 h", "24 h"), selected, onSelect = onSelect)
+        Segmented(listOf("Graph", "Per app"), mode, onSelect = onMode)
+        Spacer(Modifier.height(16.dp))
 
-            if (!enough) {
+        if (mode == 1) {
+            PerAppUsage(report, scanning, scanFailed)
+            return@SectionCard
+        }
+
+        Section("Battery usage") {
+            if (!monitorOn) {
                 Text(
-                    "Not enough data yet. Ampify logs the battery level in the background while the monitor is on.",
+                    "Graph is off. Turn on the Monitor service in the Monitor tab to start logging.",
                     color = p.mute
                 )
             } else {
-                val summary = DrainMath.summarize(all, startMs, nowMs)
+                Segmented(listOf("6 h", "12 h", "24 h"), selected, onSelect = onSelect)
 
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text("${summary.usedPercent.roundToInt()}%", style = Type.headline)
-                    Spacer(Modifier.width(8.dp))
+                if (!enough) {
                     Text(
-                        "used in the last $windowHours h",
-                        color = p.mute,
-                        modifier = Modifier.padding(bottom = 5.dp)
+                        "Not enough data yet. Ampify logs the battery level in the background while the monitor is on.",
+                        color = p.mute
                     )
-                }
+                } else {
+                    val summary = DrainMath.summarize(all, startMs, nowMs)
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StatChip(
-                        "Screen on",
-                        "${summary.screenOnDrop.roundToInt()}% in ${formatDuration(summary.screenOnMs)}",
-                        Modifier.weight(1f)
-                    )
-                    StatChip(
-                        "Screen off",
-                        "${summary.screenOffDrop.roundToInt()}% in ${formatDuration(summary.screenOffMs)}",
-                        Modifier.weight(1f)
-                    )
-                }
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text("${summary.usedPercent.roundToInt()}%", style = Type.headline)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "used in the last $windowHours h",
+                            color = p.mute,
+                            modifier = Modifier.padding(bottom = 5.dp)
+                        )
+                    }
 
-                BatteryGraph(all, windowHours, nowMs)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        StatChip(
+                            "Screen on",
+                            "${summary.screenOnDrop.roundToInt()}% in ${formatDuration(summary.screenOnMs)}",
+                            Modifier.weight(1f)
+                        )
+                        StatChip(
+                            "Screen off",
+                            "${summary.screenOffDrop.roundToInt()}% in ${formatDuration(summary.screenOffMs)}",
+                            Modifier.weight(1f)
+                        )
+                    }
 
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    LegendItem(p.accent, "On battery")
-                    LegendItem(p.mute, "Charging or no data")
+                    BatteryGraph(all, windowHours, nowMs)
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        LegendItem(p.accent, "On battery")
+                        LegendItem(p.mute, "Charging or no data")
+                    }
                 }
-                Text("The strip under the chart is red while the screen was on.", color = p.mute, style = Type.small)
             }
         }
 
@@ -310,7 +375,42 @@ private fun BatteryUsageCard(
             val bars = DrainMath.hourly(all, firstHour, windowHours)
             Section("Drain per hour") {
                 HourlyDrain(bars)
-                Text("Percent lost in each clock hour. The busiest hour is red.", color = p.mute, style = Type.small)
+            }
+        }
+    }
+}
+
+/** Battery use per app (mAh and share of all apps) since the last full charge. Needs root. */
+@Composable
+private fun PerAppUsage(report: PowerReport?, scanning: Boolean, scanFailed: Boolean) {
+    val p = LocalPalette.current
+    Section("Battery use by app") {
+        when {
+            scanning -> Row(verticalAlignment = Alignment.CenterVertically) {
+                WorkingDots()
+                Spacer(Modifier.width(12.dp))
+                Text("Reading battery stats", color = p.mute)
+            }
+            scanFailed -> Text(
+                "Couldn't read battery stats. Allow root for Ampify and try again.",
+                color = p.accent
+            )
+            report == null -> Text("Tap Scan app usage to see which apps used the most battery.", color = p.mute)
+            report.apps.isEmpty() -> Text("Android hasn't reported any app usage yet.", color = p.mute)
+            else -> {
+                Text(
+                    "Since the last full charge" +
+                        (report.capacityMah?.let { ". Battery capacity ${it.roundToInt()} mAh" } ?: "") + ".",
+                    color = p.mute
+                )
+                val max = report.apps.first().mah
+                val total = report.apps.sumOf { it.mah }.coerceAtLeast(0.001)
+                Column {
+                    report.apps.take(15).forEach {
+                        val share = (it.mah / total * 100).roundToInt()
+                        UsageRow(it.name, "${formatMah(it.mah)} · $share%", (it.mah / max).toFloat())
+                    }
+                }
             }
         }
     }

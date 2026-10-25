@@ -16,6 +16,9 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import kotlin.math.abs
 import kotlin.math.max
@@ -28,7 +31,8 @@ class BatteryMonitorService : Service() {
         const val NOTIFICATION_ID = 1001
         private const val REFRESH_INTERVAL_MS = 10_000L
 
-        var isRunning = false
+        // Compose state, so the Home graph switches on/off the moment the monitor is toggled.
+        var isRunning by mutableStateOf(false)
             private set
 
         fun start(context: Context) {
